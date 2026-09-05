@@ -1,56 +1,38 @@
-# 🍉 合成大西瓜 (Suika Game 2D)
+# 🍉 合成大西瓜 · Unified 2D Canvas Engine
 
-一套全栈精细化、基于统一 2D 物理建模与程序化图形渲染的「合成大西瓜」网页小游戏。支持触屏与鼠标，完美适配各种尺寸移动端设备（iOS / Android）。
+一款移动端适配的合成大西瓜网页游戏。**全部可见界面**——游戏场景、果篮、HUD、金币、商城、道具栏、开始页、结算页——均由一个 Canvas 上的 Unified 2D 渲染引擎绘制；HTML 只保留画布宿主，CSS 仅管理全屏与输入安全。
 
-🔗 **在线体验**: [https://baibabnmklopgif-sudo.github.io/suika-game/](https://baibabnmklopgif-sudo.github.io/suika-game/)
+## 在线试玩
 
----
+[https://baibabnmklopgif-sudo.github.io/suika-game/](https://baibabnmklopgif-sudo.github.io/suika-game/)
 
-## ✨ 核心特色与技术亮点
+## 本次核心更新
 
-### 1. 统一 2D 物理与弹力动力学 (Unified 2D Soft-Body Physics)
-- **8-子步微积分解算器 (8 Sub-steps Solver)**：消除高速下落与多物体挤压造成的隧道穿透效应（Zero-tunneling）。
-- **果冻弹簧阻尼形变 (Spring Squash & Stretch)**：水果在触底、撞墙与相互碰撞时具有果冻般的挤压与回弹阻尼物理表现。
-- **角动量与滚动摩擦模拟**：根据碰撞切向分量与表面摩擦力驱动自然旋转。
+- **修复“灵异转圈”**：移除水果的角速度与切向角冲量累积。水果采用稳定的无旋转圆体模型，仅保留弹簧阻尼驱动的 Q 弹缩放；不会再原地陀螺式旋转。
+- **金币系统**：每次合成均立即按水果等级、连击奖励金币；总金币保存在浏览器 `localStorage` 中，跨局保留。
+- **水果商城**：使用金币直接购买任意 11 个等级的水果，购买后将立即替换当前待投放水果。
+- **道具系统**：
+  - 🔨 **碎果锤（50 金币）**：开启后点按场内任意水果，将其直接消除。
+  - 📳 **摇一摇（30 金币）**：为场上水果施加一次受控扰动，帮助调整布局。
+- **全部 UI Canvas 化**：HUD、商城网格、购买按钮、道具按钮、引导线、警戒线与模态窗均在 `game.js` 中由统一绘制循环渲染与命中检测。
 
-### 2. 512x512 菲涅尔 2.5D 高质感贴图 (Python + NumPy 渲染)
-- `generate_assets.py` 采用 NumPy 矩阵加速与多层光照模型：
-  - 球体 3 段漫反射衰减
-  - 菲涅尔边缘光 (Fresnel Rim Light)
-  - 水润双高光与环境反光
-  - 11 种水果各具特色表情（闭眼呆萌、调皮眨眼、害羞腮红、开怀大笑）与果皮细节纹理。
+## 技术实现
 
-### 3. 视觉与打击感反馈
-- **COMBO 连击系统**：短时间内连续合成触发 `COMBO x2, x3...`，享受倍率加分与连击音阶跃升。
-- **冲击波 (Shockwave) & 屏幕震动 (Screen Shake)**：合成高级水果触发扩散光圈冲击波与镜头震感。
-- **果汁飞溅粒子 (Splash Particles)** 与得分上浮动画。
+- 6 子步圆形刚体碰撞与质量比例分离，减少堆叠穿透。
+- 弹簧-阻尼系统实现合成、撞墙、落地时的挤压回弹。
+- Canvas 统一输入命中检测，Pointer Events 同时支持鼠标和触屏。
+- DPR 最高 3 倍高清画布缩放，并随横竖屏变化重布局。
+- Python `generate_assets.py`（NumPy + Pillow）生成 512×512 2.5D 水果贴图。
 
-### 4. 纯代码程序化音效与触感
-- 基于 **WebAudio API** 实时合成和弦音阶与掉落木质打击音，无需下载外部音频包。
-- 接入 **Vibration API (Haptic Feedback)**，在支持的移动设备上提供真实的碰撞震感反馈。
-
----
-
-## 📁 目录结构
-
-```
-suika/
-├── generate_assets.py   # Python 2D 渲染器 (NumPy + Pillow 批量生成 512x512 贴图)
-├── index.html           # 语义化 HTML5 骨架 (HUD, 进化链, 模态弹层, 安全区适配)
-├── style.css            # 现代毛玻璃 UI (Glassmorphism), 响应式自适应, 动画特效
-├── game.js              # 游戏核心引擎 (统一2D物理, 弹簧软体, 渲染, 音频合成)
-├── assets/              # 生成的高清水果与背景纹理 PNG
-└── README.md
-```
-
-## 🚀 本地运行与开发
+## 运行
 
 ```bash
-# 1.（可选）重新生成贴图
+# 可选：重新生成贴图
 pip install pillow numpy
 python3 generate_assets.py
 
-# 2. 启动本地静态服务器
+# 启动静态服务器
 python3 -m http.server 8000
-# 浏览器访问 http://localhost:8000
 ```
+
+然后打开 `http://localhost:8000`。

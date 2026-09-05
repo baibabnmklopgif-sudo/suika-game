@@ -1,94 +1,16 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="zh-CN">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-<meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="theme-color" content="#ffd77a">
-<title>合成大西瓜 · Suika 2D</title>
-<link rel="stylesheet" href="style.css">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+  <meta name="theme-color" content="#ffd77a">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <title>合成大西瓜 · Unified 2D</title>
+  <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <div id="app">
-    <!-- 顶部 HUD 仪表板 -->
-    <header id="hud">
-      <div class="hud-box score-box">
-        <span class="hud-label">得分</span>
-        <span id="score">0</span>
-      </div>
-      
-      <div id="title-wrap">
-        <h1 id="title">🍉 合成大西瓜</h1>
-        <div id="combo-tag" class="hidden">COMBO x2</div>
-      </div>
-
-      <div class="hud-box best-box">
-        <span class="hud-label">历史最高</span>
-        <span id="best">0</span>
-      </div>
-    </header>
-
-    <!-- 下一个水果与操作按钮栏 -->
-    <div id="action-bar">
-      <div id="next-preview">
-        <span class="preview-label">下一个</span>
-        <div class="next-img-wrapper">
-          <img id="next-img" alt="下一个水果" src="assets/grape.png">
-        </div>
-      </div>
-      <div class="hud-tools">
-        <button id="sound-btn" class="tool-btn" title="声音开关" aria-label="声音开关">🔔</button>
-        <button id="help-btn" class="tool-btn" title="游戏规则" aria-label="游戏规则">❓</button>
-      </div>
-    </div>
-
-    <!-- 游戏主舞台 Canvas -->
-    <main id="stage">
-      <canvas id="game"></canvas>
-      <div id="danger-line"><span class="line-tag">警戒线</span></div>
-    </main>
-
-    <!-- 底部进化链图鉴 -->
-    <footer id="evolution-container">
-      <div id="evolution"></div>
-    </footer>
-
-    <!-- 结算弹窗 -->
-    <div id="overlay" class="modal-overlay hidden">
-      <div class="panel">
-        <div class="panel-icon">🍉</div>
-        <h2 id="over-title">游戏结束</h2>
-        <div class="panel-score-card">
-          <div class="card-item">
-            <span>本局得分</span>
-            <b id="final-score">0</b>
-          </div>
-          <div class="card-item">
-            <span>历史最高</span>
-            <b id="final-best">0</b>
-          </div>
-        </div>
-        <p id="best-tip" class="new-record hidden">🎉 恭喜创造新纪录！</p>
-        <button id="restart-btn" class="primary-btn">再来一局</button>
-      </div>
-    </div>
-
-    <!-- 欢迎/开始弹窗 -->
-    <div id="start-overlay" class="modal-overlay">
-      <div class="panel">
-        <div class="panel-icon">🍉</div>
-        <h2>合成大西瓜</h2>
-        <p class="guide-text">
-          👆 <b>左右滑动</b> 瞄准投放位置<br>
-          👇 <b>松开手指</b> 掉落水果<br>
-          ✨ 两个相同水果碰撞合成更大水果！
-        </p>
-        <button id="start-btn" class="primary-btn">开始游戏</button>
-      </div>
-    </div>
-  </div>
-
+  <!-- 所有游戏、HUD、商城、弹窗均由 Unified 2D Canvas Engine 渲染 -->
+  <canvas id="app-canvas" aria-label="合成大西瓜游戏"></canvas>
   <script src="game.js"></script>
 </body>
 </html>

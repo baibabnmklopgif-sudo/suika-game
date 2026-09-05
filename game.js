@@ -1,679 +1,122 @@
-/* ===================================================================
- *  合成大西瓜 · Unified 2D Physics & Animation Engine
- *  - 真实滚动物理 (Rolling Physics & High Angular Damping - 杜绝幽灵自转)
- *  - 2.5D 弹力软体变形 (Squish & Spring-Damper)
- *  - 8-子步高精度圆体刚体碰撞解算器 (Zero-tunneling Impulse Solver)
- *  - 冲击波涟漪 (Shockwave) & 屏幕震动 (Screen Shake)
- *  - 连击 (Combo) 乘数加分与动态升调音效
- *  - WebAudio 纯代码程序化合成音效 + 移动端震动反馈 (Haptic)
- * =================================================================== */
-"use strict";
-
-/* ---------- 水果配置表 ---------- */
-const FRUITS = [
-  { id: 0,  name: "葡萄",   img: "grape",      r: 0.052, score: 1   },
-  { id: 1,  name: "樱桃",   img: "cherry",     r: 0.070, score: 2   },
-  { id: 2,  name: "橘子",   img: "orange",     r: 0.088, score: 4   },
-  { id: 3,  name: "柠檬",   img: "lemon",      r: 0.106, score: 8   },
-  { id: 4,  name: "猕猴桃", img: "kiwi",       r: 0.126, score: 16  },
-  { id: 5,  name: "番茄",   img: "tomato",     r: 0.150, score: 32  },
-  { id: 6,  name: "桃子",   img: "peach",      r: 0.176, score: 64  },
-  { id: 7,  name: "菠萝",   img: "pineapple",  r: 0.206, score: 128 },
-  { id: 8,  name: "椰子",   img: "coconut",    r: 0.240, score: 256 },
-  { id: 9,  name: "半西瓜", img: "halfmelon",  r: 0.278, score: 512 },
-  { id: 10, name: "大西瓜", img: "watermelon", r: 0.320, score: 1024},
-];
-
-const MAX_DROP_LEVEL = 4;        // 掉落仅出前 5 种基础水果
-const GRAVITY = 2700;            // px/s² (基于标准宽 480px)
-const RESTITUTION = 0.20;        // 弹性恢复系数
-const FRICTION = 0.985;          // 地面滚动阻尼
-const DROP_COOLDOWN = 360;       // 掉落冷却 (ms)
-const DANGER_RATIO = 0.17;       // 警戒线高度比例
-const OVER_TIME = 1200;          // 警戒线上超时判负 (ms)
-
-/* ---------- DOM 元素绑定 ---------- */
-const canvas       = document.getElementById("game");
-const ctx          = canvas.getContext("2d");
-const stageEl      = document.getElementById("stage");
-const scoreEl      = document.getElementById("score");
-const bestEl       = document.getElementById("best");
-const comboTag     = document.getElementById("combo-tag");
-const nextImg      = document.getElementById("next-img");
-const lineEl       = document.getElementById("danger-line");
-const soundBtn     = document.getElementById("sound-btn");
-const helpBtn      = document.getElementById("help-btn");
-const overlay      = document.getElementById("overlay");
-const startOverlay = document.getElementById("start-overlay");
-const finalEl      = document.getElementById("final-score");
-const finalBestEl  = document.getElementById("final-best");
-const bestTip      = document.getElementById("best-tip");
-
-/* ---------- 素材加载 ---------- */
-const sprites = {};
-FRUITS.forEach(f => {
-  const img = new Image();
-  img.src = `assets/${f.img}.png`;
-  sprites[f.img] = img;
-});
-
-/* ---------- 进化链图鉴生成 ---------- */
+/*
+ * Unified 2D Canvas Engine · 合成大西瓜
+ * 一个 Canvas 负责：场景、物理水果、HUD、道具栏、商城、开始页与结算页。
+ * 不再为水果施加角速度：水果保持正向，只有 Q 弹缩放动画，彻底消除“灵异转圈”。
+ */
 (() => {
-  const evo = document.getElementById("evolution");
-  FRUITS.forEach((f, idx) => {
-    const im = document.createElement("img");
-    im.src = `assets/${f.img}.png`;
-    im.alt = f.name;
-    evo.appendChild(im);
-    if (idx < FRUITS.length - 1) {
-      const arr = document.createElement("span");
-      arr.className = "arrow";
-      arr.textContent = "▸";
-      evo.appendChild(arr);
+  'use strict';
+  const C = document.querySelector('#app-canvas');
+  const X = C.getContext('2d');
+  const FRUITS = [
+    ['葡萄','grape',.052,1,10], ['樱桃','cherry',.070,2,18], ['橘子','orange',.088,4,30],
+    ['柠檬','lemon',.106,8,50], ['猕猴桃','kiwi',.126,16,80], ['番茄','tomato',.150,32,125],
+    ['桃子','peach',.176,64,190], ['菠萝','pineapple',.206,128,280], ['椰子','coconut',.240,256,400],
+    ['半西瓜','halfmelon',.278,512,580], ['大西瓜','watermelon',.320,1024,820]
+  ].map(([name,img,r,score,price], level) => ({name,img,r,score,price,level}));
+  const I = {};
+  FRUITS.forEach(f => { const i=new Image(); i.src=`assets/${f.img}.png`; I[f.img]=i; });
+
+  let W=0,H=0,D=1, stage={x:10,y:116,w:0,h:0}, bodies=[], particles=[], waves=[], buttons=[];
+  let screen='start', running=false, score=0, coins=+(localStorage.getItem('suika_coins')||0), best=+(localStorage.getItem('suika_best_v3')||0);
+  let earned=0, current=0, next=0, aimX=0, canDrop=true, danger=0, hammer=false, combo=0, lastMerge=0, shake=0, pointerDown=false, last=performance.now();
+  const ui={ font:'system-ui,-apple-system,"PingFang SC","Microsoft YaHei",sans-serif' };
+
+  function resize(){
+    D=Math.min(devicePixelRatio||1,3); W=innerWidth; H=innerHeight; C.width=W*D; C.height=H*D; X.setTransform(D,0,0,D,0,0);
+    const bottom=72, top=116; stage={x:10,y:top,w:W-20,h:Math.max(230,H-top-bottom)}; aimX=W/2;
+    bodies.forEach(b=>{b.r=radius(b.level);b.x=Math.max(stage.x+b.r,Math.min(stage.x+stage.w-b.r,b.x));});
+  }
+  function radius(l){ return FRUITS[l].r*stage.w*.5; }
+  function rand(){ const a=[32,28,20,12,8]; let q=Math.random()*100; for(let i=0;i<a.length;i++){q-=a[i];if(q<0)return i;}return 0; }
+  function body(l,x,y,merge=false){ return {level:l,x,y,r:radius(l),vx:0,vy:0,sx:merge?1.35:.88,sy:merge?.75:1.12,vsx:0,vsy:0,born:performance.now()}; }
+  function reset(){ bodies=[];particles=[];waves=[];score=0;earned=0;combo=0;danger=0;hammer=false;current=rand();next=rand();aimX=W/2;canDrop=true;running=true;screen='game'; }
+  function saveCoins(){localStorage.setItem('suika_coins',coins);}
+  function addCoins(n,x,y){ coins+=n;earned+=n;saveCoins(); floatText(x,y,`+${n} 💰`,'#f39c12'); }
+
+  // ------- 物理：无旋转模型，位置+速度+弹簧缩放 -------
+  function physics(dt){
+    const g=2350*(stage.w/460), floor=stage.y+stage.h;
+    for(const b of bodies){
+      b.vy+=g*dt; b.x+=b.vx*dt;b.y+=b.vy*dt;b.vx*=.996;
+      // Q 弹形变回正
+      b.vsx+=(-145*(b.sx-1)-17*b.vsx)*dt; b.vsy+=(-145*(b.sy-1)-17*b.vsy)*dt;b.sx+=b.vsx*dt;b.sy+=b.vsy*dt;
+      if(b.x-b.r<stage.x){b.x=stage.x+b.r;b.vx=Math.abs(b.vx)*.16;b.sx=.9;b.sy=1.1;}
+      if(b.x+b.r>stage.x+stage.w){b.x=stage.x+stage.w-b.r;b.vx=-Math.abs(b.vx)*.16;b.sx=.9;b.sy=1.1;}
+      if(b.y+b.r>floor){b.y=floor-b.r;if(Math.abs(b.vy)>55)b.vy=-b.vy*.16;else b.vy=0;b.vx*=.96;if(Math.abs(b.vx)<2)b.vx=0;b.sx=1.13;b.sy=.89;}
     }
-  });
+    let merging=null;
+    for(let i=0;i<bodies.length;i++)for(let j=i+1;j<bodies.length;j++){
+      const a=bodies[i],b=bodies[j],dx=b.x-a.x,dy=b.y-a.y,dist=Math.hypot(dx,dy)||.01,min=a.r+b.r;
+      if(dist>=min)continue;
+      if(a.level===b.level&&!merging&&a.level<10) merging=[a,b];
+      const nx=dx/dist,ny=dy/dist,over=min-dist,ma=a.r*a.r,mb=b.r*b.r,sum=ma+mb;
+      a.x-=nx*over*(mb/sum);a.y-=ny*over*(mb/sum);b.x+=nx*over*(ma/sum);b.y+=ny*over*(ma/sum);
+      const rvx=b.vx-a.vx,rvy=b.vy-a.vy,vn=rvx*nx+rvy*ny;
+      if(vn<0){const p=-(1.16)*vn/(1/ma+1/mb);a.vx-=p*nx/ma;a.vy-=p*ny/ma;b.vx+=p*nx/mb;b.vy+=p*ny/mb;a.sx=b.sx=1.07;a.sy=b.sy=.94;}
+    }
+    if(merging) merge(...merging);
+  }
+  function merge(a,b){
+    bodies=bodies.filter(v=>v!==a&&v!==b);const l=a.level+1,x=(a.x+b.x)/2,y=(a.y+b.y)/2,n=body(l,x,y,true);n.vy=-90;bodies.push(n);
+    const now=performance.now();combo=now-lastMerge<1500?combo+1:1;lastMerge=now;
+    const gain=FRUITS[l].score*(combo>1?combo:1);score+=gain;if(score>best){best=score;localStorage.setItem('suika_best_v3',best);}
+    const coinGain=Math.max(1,Math.ceil(FRUITS[l].score/16))+(combo>1?combo-1:0);addCoins(coinGain,x,y-20);floatText(x,y-n.r,combo>1?`+${gain}  COMBO×${combo}`:`+${gain}`,'#ff4b1f');burst(x,y,l);waves.push({x,y,r:n.r*.45,max:n.r*2.3,a:.8});shake=Math.min(9,shake+2+l*.5);
+  }
+  function drop(){if(!canDrop||!running)return;const r=radius(current),x=Math.max(stage.x+r,Math.min(stage.x+stage.w-r,aimX));bodies.push(body(current,x,stage.y+r+4));current=next;next=rand();canDrop=false;setTimeout(()=>canDrop=true,340);}
+  function burst(x,y,l){const colors=['#ff7b54','#ffd166','#73d2de','#ff99c8','#9ef01a'];for(let k=0;k<10+l*2;k++){const a=Math.random()*6.28,s=65+Math.random()*170;particles.push({x,y,vx:Math.cos(a)*s,vy:Math.sin(a)*s-60,life:1,c:colors[k%colors.length],z:3+Math.random()*4});}}
+  function floatText(x,y,t,c){particles.push({text:t,x,y,vy:-48,life:1.2,c,z:0});}
+  function hitHammer(x,y){ let target=null,d=1e9; for(const b of bodies){const v=Math.hypot(x-b.x,y-b.y);if(v<b.r&&v<d){target=b;d=v;}}if(target){bodies=bodies.filter(b=>b!==target);burst(target.x,target.y,target.level);waves.push({x:target.x,y:target.y,r:8,max:target.r*2,a:.9});hammer=false;return true;}return false; }
+  function doShake(){for(const b of bodies){b.vx+=(Math.random()-.5)*330;b.vy-=80+Math.random()*110;}shake=10;}
+  function checkLose(dt){const line=stage.y+stage.h*.17, now=performance.now();let bad=false;for(const b of bodies)if(now-b.born>850&&b.y-b.r<line&&Math.abs(b.vy)<50){bad=true;break;} danger=bad?danger+dt*1000:0;if(danger>1200){running=false;screen='over';}}
+
+  // ------- Canvas UI -------
+  function rr(x,y,w,h,r,fill,stroke){X.beginPath();X.roundRect(x,y,w,h,r);if(fill){X.fillStyle=fill;X.fill();}if(stroke){X.strokeStyle=stroke;X.stroke();}}
+  function text(s,x,y,size,color,align='left',weight=700){X.font=`${weight} ${size}px ${ui.font}`;X.fillStyle=color;X.textAlign=align;X.textBaseline='middle';X.fillText(s,x,y);}
+  function image(im,x,y,w,h){if(im?.complete)X.drawImage(im,x,y,w,h);}
+  function button(id,x,y,w,h,label,fn,kind='normal') { buttons.push({id,x,y,w,h,fn}); const bg=kind==='gold'?'#ffb52e':kind==='danger'?'#ff745f':'rgba(255,255,255,.84)';rr(x,y,w,h,h/2,bg,kind==='gold'?'#db8800':'rgba(213,130,30,.4)');text(label,x+w/2,y+h/2,Math.min(14,h*.45),kind==='gold'?'#773900':'#7b4311','center',800); }
+  function drawBackground(){const g=X.createLinearGradient(0,0,0,H);g.addColorStop(0,'#ffedb1');g.addColorStop(1,'#ffc965');X.fillStyle=g;X.fillRect(0,0,W,H);for(let x=20;x<W;x+=68)for(let y=12;y<H;y+=68){X.fillStyle='rgba(255,255,255,.16)';X.beginPath();X.arc(x+(y/68%2)*16,y,7,0,6.28);X.fill();}}
+  function drawHud(){
+    const gap=6, bw=(W-28)/3;[['得分',String(score),'#d94a14'],['💰 金币',String(coins),'#c77c00'],['最高',String(best),'#d94a14']].forEach((a,i)=>{const x=10+i*(bw+gap);rr(x,9,bw,47,12,'rgba(255,255,255,.76)','rgba(231,163,54,.55)');text(a[0],x+bw/2,24,10,'#9e5b1a','center');text(a[1],x+bw/2,42,19,a[2],'center',900);});
+    rr(10,65,100,38,18,'rgba(255,255,255,.75)','rgba(231,163,54,.5)');text('下一个',20,84,11,'#875014');image(I[FRUITS[next].img],76,69,30,30);
+    if(combo>1&&performance.now()-lastMerge<1500){rr(W/2-45,73,90,23,12,'#ff5e4d');text(`COMBO × ${combo}`,W/2,84,11,'#fff','center',900);}
+    button('shop',W-116,66,73,34,'🛒 商店',()=>screen='shop','gold');button('sound',W-38,66,28,34,'🔔',()=>{},'normal');
+  }
+  function drawStage(){
+    const {x,y,w,h}=stage;rr(x,y,w,h,20,'rgba(255,255,255,.22)','rgba(197,125,32,.75)');
+    const ly=y+h*.17;X.save();X.setLineDash([6,6]);X.strokeStyle=danger?'#ff304f':'rgba(220,65,60,.62)';X.lineWidth=2;X.beginPath();X.moveTo(x,ly);X.lineTo(x+w,ly);X.stroke();X.restore();text('警戒线',x+w-8,ly-8,9,'#e13b38','right');
+    X.save();X.beginPath();X.roundRect(x,y,w,h,20);X.clip();if(shake){X.translate((Math.random()-.5)*shake,(Math.random()-.5)*shake);}
+    if(running&&canDrop){const r=radius(current),px=Math.max(x+r,Math.min(x+w-r,aimX));X.save();X.setLineDash([5,7]);X.strokeStyle='rgba(255,255,255,.75)';X.beginPath();X.moveTo(px,y+r*2+5);X.lineTo(px,y+h);X.stroke();X.restore();drawFruit(current,px,y+r+5,r,1,1);}
+    bodies.forEach(b=>drawFruit(b.level,b.x,b.y,b.r,b.sx,b.sy));
+    waves.forEach(v=>{X.strokeStyle=`rgba(255,255,255,${v.a})`;X.lineWidth=3;X.beginPath();X.arc(v.x,v.y,v.r,0,6.28);X.stroke();});
+    particles.forEach(p=>{X.globalAlpha=Math.max(0,p.life);if(p.text)text(p.text,p.x,p.y,15,p.c,'center',900);else{X.fillStyle=p.c;X.beginPath();X.arc(p.x,p.y,p.z*p.life,0,6.28);X.fill();}X.globalAlpha=1;});
+    X.restore();
+    if(hammer){rr(W/2-115,y+10,230,30,15,'#f95f50');text('🔨 消除模式：点击场上任意水果',W/2,y+25,13,'#fff','center',900);}
+  }
+  function drawFruit(l,x,y,r,sx=1,sy=1){X.save();X.translate(x,y);X.scale(sx,sy);image(I[FRUITS[l].img],-r,-r,r*2,r*2);X.restore();}
+  function drawBottom(){
+    const y=stage.y+stage.h+8,h=38, gap=6,w=(W-20-gap*2)/3;
+    button('hammer',10,y,w,h,'🔨 碎果锤 50',()=>buyProp('hammer',50),'normal');
+    button('shake',10+w+gap,y,w,h,'📳 摇一摇 30',()=>buyProp('shake',30),'normal');
+    button('quickshop',10+(w+gap)*2,y,w,h,'🍉 买水果',()=>screen='shop','gold');
+  }
+  function drawEvolution(){const y=H-19;X.fillStyle='rgba(255,255,255,.48)';X.fillRect(0,H-39,W,39);const step=(W-18)/11;FRUITS.forEach((f,i)=>{image(I[f.img],9+i*step,y-10,20,20);});}
+  function drawModal(title,lines,primary){X.fillStyle='rgba(45,20,5,.56)';X.fillRect(0,0,W,H);const w=Math.min(360,W-32),h=title==='🛒 水果商店'?Math.min(560,H-40):260,x=(W-w)/2,y=(H-h)/2;rr(x,y,w,h,24,'#fff9ea','#f4a33d');text(title,x+w/2,y+30,22,'#bd4617','center',900);return {x,y,w,h,primary};}
+  function drawStart(){const m=drawModal('🍉 合成大西瓜',[],null);text('滑动瞄准，松手掉落水果',W/2,m.y+80,14,'#754719','center');text('相同水果碰撞即可合成升级！',W/2,m.y+108,14,'#754719','center');text('💰 合成赚金币，购买指定水果和道具',W/2,m.y+136,13,'#a15a17','center',800);button('start',W/2-90,m.y+175,180,48,'开始游戏',reset,'gold');}
+  function drawOver(){const m=drawModal('🍉 游戏结束',[],null);text(`本局得分  ${score}`,W/2,m.y+82,18,'#d94a14','center',900);text(`本局金币  +${earned} 💰`,W/2,m.y+112,15,'#c77c00','center',800);text(`历史最高  ${best}`,W/2,m.y+140,14,'#875014','center');button('restart',W/2-90,m.y+178,180,47,'再来一局',reset,'gold');}
+  function drawShop(){const m=drawModal('🛒 水果商店',[],null);button('close',m.x+m.w-38,m.y+10,28,27,'×',()=>screen='game');text(`当前金币：${coins} 💰`,m.x+18,m.y+65,14,'#a46113','left',900);text('购买后替换当前待投放水果',m.x+18,m.y+87,11,'#805322','left');
+    const cols=3,gap=9,pad=16,cw=(m.w-pad*2-gap*2)/cols,ch=78,startY=m.y+100;
+    FRUITS.forEach((f,i)=>{const col=i%cols,row=(i/cols)|0,x=m.x+pad+col*(cw+gap),y=startY+row*(ch+gap);const ok=coins>=f.price;buttons.push({id:'fruit'+i,x,y,w:cw,h:ch,fn:()=>buyFruit(i)});rr(x,y,cw,ch,13,ok?'#fff':'#eee',ok?'#f2b24b':'#c6c6c6');image(I[f.img],x+cw/2-20,y+5,40,40);text(f.name,x+cw/2,y+51,11,'#744514','center',800);rr(x+8,y+60,cw-16,14,7,ok?'#ffad2f':'#aaa');text(`💰 ${f.price}`,x+cw/2,y+67,9,ok?'#703800':'#eee','center',900);});
+  }
+  function buyFruit(l){const f=FRUITS[l];if(coins<f.price)return;coins-=f.price;saveCoins();current=l;screen='game';}
+  function buyProp(type,cost){if(!running||coins<cost)return;coins-=cost;saveCoins();if(type==='hammer'){hammer=!hammer;}else doShake();}
+  function render(){buttons=[];drawBackground();if(screen==='game'){drawHud();drawStage();drawBottom();drawEvolution();}else if(screen==='start')drawStart();else if(screen==='over')drawOver();else if(screen==='shop'){drawHud();drawStage();drawBottom();drawEvolution();drawShop();}}
+  function update(dt){if(running&&screen==='game'){for(let i=0;i<6;i++)physics(dt/6);checkLose(dt);}particles.forEach(p=>{p.y+=(p.vy||0)*dt;if(!p.text){p.x+=p.vx*dt;p.vy+=900*dt;}p.life-=dt*(p.text?.85:1.55);});particles=particles.filter(p=>p.life>0);waves.forEach(w=>{w.r+=(w.max-w.r)*dt*9;w.a-=dt*2.5;});waves=waves.filter(w=>w.a>0);shake=Math.max(0,shake-dt*28);}
+  function loop(t){const dt=Math.min(.033,(t-last)/1000);last=t;update(dt);render();requestAnimationFrame(loop);}
+
+  function point(e){const r=C.getBoundingClientRect();return {x:e.clientX-r.left,y:e.clientY-r.top};}
+  C.addEventListener('pointerdown',e=>{pointerDown=true;const p=point(e);aimX=p.x;C.setPointerCapture?.(e.pointerId);});
+  C.addEventListener('pointermove',e=>{if(pointerDown||e.pointerType==='mouse')aimX=point(e).x;});
+  C.addEventListener('pointerup',e=>{const p=point(e);pointerDown=false;const hit=buttons.find(b=>p.x>=b.x&&p.x<=b.x+b.w&&p.y>=b.y&&p.y<=b.y+b.h);if(hit){hit.fn();return;}if(screen==='game'){if(hammer){hitHammer(p.x,p.y);}else if(p.x>=stage.x&&p.x<=stage.x+stage.w&&p.y>=stage.y&&p.y<=stage.y+stage.h)drop();}});
+  C.addEventListener('contextmenu',e=>e.preventDefault());window.addEventListener('resize',resize);document.addEventListener('touchmove',e=>e.preventDefault(),{passive:false});
+  resize();requestAnimationFrame(loop);
 })();
-
-/* ---------- WebAudio 音频合成引擎 ---------- */
-let audioEnabled = true;
-let audioCtx = null;
-
-function getAudioContext() {
-  if (!audioCtx) {
-    const AC = window.AudioContext || window.webkitAudioContext;
-    if (AC) audioCtx = new AC();
-  }
-  if (audioCtx && audioCtx.state === "suspended") {
-    audioCtx.resume();
-  }
-  return audioCtx;
-}
-
-function playSound(type, param = 0) {
-  if (!audioEnabled) return;
-  try {
-    const actx = getAudioContext();
-    if (!actx) return;
-    const now = actx.currentTime;
-
-    if (type === "drop") {
-      const osc = actx.createOscillator();
-      const gain = actx.createGain();
-      osc.type = "sine";
-      osc.frequency.setValueAtTime(280, now);
-      osc.frequency.exponentialRampToValueAtTime(140, now + 0.08);
-      gain.gain.setValueAtTime(0.18, now);
-      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.08);
-      osc.connect(gain).connect(actx.destination);
-      osc.start(now);
-      osc.stop(now + 0.08);
-    } else if (type === "merge") {
-      const baseFreq = 340 + param * 45;
-      const notes = [baseFreq, baseFreq * 1.25, baseFreq * 1.5];
-      notes.forEach((freq, i) => {
-        const osc = actx.createOscillator();
-        const gain = actx.createGain();
-        osc.type = "triangle";
-        osc.frequency.setValueAtTime(freq, now + i * 0.03);
-        gain.gain.setValueAtTime(0.2, now + i * 0.03);
-        gain.gain.exponentialRampToValueAtTime(0.001, now + i * 0.03 + 0.14);
-        osc.connect(gain).connect(actx.destination);
-        osc.start(now + i * 0.03);
-        osc.stop(now + i * 0.03 + 0.14);
-      });
-    } else if (type === "watermelon") {
-      const chord = [523.25, 659.25, 783.99, 1046.50];
-      chord.forEach((f, i) => {
-        const osc = actx.createOscillator();
-        const gain = actx.createGain();
-        osc.type = "sine";
-        osc.frequency.setValueAtTime(f, now + i * 0.06);
-        gain.gain.setValueAtTime(0.25, now + i * 0.06);
-        gain.gain.exponentialRampToValueAtTime(0.001, now + i * 0.06 + 0.35);
-        osc.connect(gain).connect(actx.destination);
-        osc.start(now + i * 0.06);
-        osc.stop(now + i * 0.06 + 0.35);
-      });
-    }
-  } catch (e) {}
-}
-
-function vibrate(ms) {
-  if (navigator.vibrate) {
-    try { navigator.vibrate(ms); } catch (e) {}
-  }
-}
-
-/* ---------- 响应式屏幕缩放适配 ---------- */
-let W = 0, H = 0, DPR = 1, SCALE = 1;
-function handleResize() {
-  const rect = stageEl.getBoundingClientRect();
-  DPR = Math.min(window.devicePixelRatio || 1, 3);
-  W = rect.width;
-  H = rect.height;
-  canvas.width  = Math.round(W * DPR);
-  canvas.height = Math.round(H * DPR);
-  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
-  SCALE = W / 480;
-  lineEl.style.top = `${H * DANGER_RATIO}px`;
-
-  for (const b of bodies) {
-    b.r = fruitRadius(b.level);
-    b.x = Math.max(b.r, Math.min(W - b.r, b.x));
-  }
-}
-window.addEventListener("resize", handleResize);
-window.addEventListener("orientationchange", () => setTimeout(handleResize, 200));
-
-/* ---------- 游戏状态变量 ---------- */
-let bodies = [];
-let particles = [];
-let shockwaves = [];
-let score = 0;
-let best = +(localStorage.getItem("suika_best_v2") || 0);
-let curLevel = 0, nextLevel = 0;
-let aimX = null;
-let canDrop = true;
-let isRunning = false;
-let isGameOver = false;
-let dangerTimer = 0;
-let screenShake = 0;
-
-// 连击 (Combo) 机制
-let comboCount = 0;
-let lastMergeTime = 0;
-const COMBO_TIMEOUT = 1600; // ms
-
-bestEl.textContent = best;
-
-function randFruitLevel() {
-  const weights = [32, 28, 20, 12, 8];
-  let total = 0;
-  for (let i = 0; i <= MAX_DROP_LEVEL; i++) total += weights[i];
-  let r = Math.random() * total;
-  for (let i = 0; i <= MAX_DROP_LEVEL; i++) {
-    r -= weights[i];
-    if (r < 0) return i;
-  }
-  return 0;
-}
-
-function fruitRadius(level) {
-  return FRUITS[level].r * W * 0.5;
-}
-
-/* 刚体对象建模 */
-function createBody(level, x, y, isMerge = false) {
-  const r = fruitRadius(level);
-  return {
-    id: Math.random(),
-    level,
-    r,
-    x, y,
-    vx: 0, vy: 0,
-    rot: 0,              // 初始角度自然端正
-    vr: 0,               // 初始角速度为 0
-    // 弹力形变动画系统 (Spring Squash & Stretch)
-    sx: isMerge ? 1.35 : 0.85,
-    sy: isMerge ? 0.75 : 1.15,
-    vsx: 0, vsy: 0,
-    spawnTime: performance.now(),
-  };
-}
-
-function initGame() {
-  bodies = [];
-  particles = [];
-  shockwaves = [];
-  score = 0;
-  comboCount = 0;
-  scoreEl.textContent = "0";
-  comboTag.classList.add("hidden");
-  curLevel = randFruitLevel();
-  nextLevel = randFruitLevel();
-  nextImg.src = `assets/${FRUITS[nextLevel].img}.png`;
-  canDrop = true;
-  isGameOver = false;
-  dangerTimer = 0;
-  screenShake = 0;
-  aimX = W / 2;
-  lineEl.classList.remove("flash");
-  overlay.classList.add("hidden");
-}
-
-/* ---------- 掉落操作 ---------- */
-function performDrop(targetX) {
-  if (!canDrop || isGameOver || !isRunning) return;
-  const r = fruitRadius(curLevel);
-  const x = Math.max(r + 2, Math.min(W - r - 2, targetX));
-  const body = createBody(curLevel, x, r + 6, false);
-  body.vy = 60 * SCALE;
-  bodies.push(body);
-
-  playSound("drop");
-  vibrate(15);
-
-  canDrop = false;
-  curLevel = nextLevel;
-  nextLevel = randFruitLevel();
-  nextImg.src = `assets/${FRUITS[nextLevel].img}.png`;
-
-  setTimeout(() => { canDrop = true; }, DROP_COOLDOWN);
-}
-
-/* ---------- 合成逻辑与特效 ---------- */
-function mergeFruit(a, b) {
-  const nextLv = a.level + 1;
-  const mx = (a.x + b.x) / 2;
-  const my = (a.y + b.y) / 2;
-
-  bodies = bodies.filter(item => item !== a && item !== b);
-
-  const nb = createBody(nextLv, mx, my, true);
-  nb.vy = -140 * SCALE;
-  bodies.push(nb);
-
-  const now = performance.now();
-  if (now - lastMergeTime < COMBO_TIMEOUT) {
-    comboCount++;
-  } else {
-    comboCount = 1;
-  }
-  lastMergeTime = now;
-
-  const baseScore = FRUITS[nextLv].score;
-  const comboMultiplier = comboCount > 1 ? comboCount : 1;
-  const finalGain = baseScore * comboMultiplier;
-
-  score += finalGain;
-  scoreEl.textContent = score;
-
-  if (comboCount > 1) {
-    comboTag.textContent = `COMBO x${comboCount}`;
-    comboTag.classList.remove("hidden");
-  }
-
-  spawnFloatScore(mx, my - nb.r, comboCount > 1 ? `+${finalGain} (x${comboCount})` : `+${finalGain}`);
-  spawnSplashParticles(mx, my, nextLv);
-
-  shockwaves.push({ x: mx, y: my, r: nb.r * 0.5, maxR: nb.r * 2.8, alpha: 0.8 });
-  screenShake = Math.min(14, screenShake + 3 + nextLv * 0.8);
-  vibrate(Math.min(60, 20 + nextLv * 5));
-
-  if (nextLv === FRUITS.length - 1) {
-    playSound("watermelon");
-    celebrateWatermelon(mx, my);
-  } else {
-    playSound("merge", nextLv + (comboCount - 1));
-  }
-
-  if (score > best) {
-    best = score;
-    bestEl.textContent = best;
-    localStorage.setItem("suika_best_v2", best);
-  }
-}
-
-function spawnFloatScore(x, y, text) {
-  const el = document.createElement("div");
-  el.className = "float-score";
-  el.textContent = text;
-  el.style.left = `${x}px`;
-  el.style.top  = `${y}px`;
-  stageEl.appendChild(el);
-  setTimeout(() => el.remove(), 850);
-}
-
-function spawnSplashParticles(x, y, level) {
-  const count = 12 + level * 3;
-  const colors = ["#ff5252", "#ffb142", "#34ace0", "#33d9b2", "#ffda79", "#ff793f"];
-  for (let i = 0; i < count; i++) {
-    const angle = Math.random() * Math.PI * 2;
-    const speed = (90 + Math.random() * 240) * SCALE;
-    particles.push({
-      x, y,
-      vx: Math.cos(angle) * speed,
-      vy: Math.sin(angle) * speed - 80 * SCALE,
-      size: (3 + Math.random() * 5) * SCALE,
-      color: colors[(Math.random() * colors.length) | 0],
-      life: 1.0,
-      decay: 1.5 + Math.random() * 1.2
-    });
-  }
-}
-
-function celebrateWatermelon(x, y) {
-  for (let k = 0; k < 4; k++) {
-    setTimeout(() => spawnSplashParticles(x, y, 10), k * 140);
-  }
-}
-
-/* ---------- 统一 2D 物理与真实旋转解算 ---------- */
-function updatePhysics(dt) {
-  const g = GRAVITY * SCALE;
-  const angularDamping = Math.pow(0.005, dt); // 极强的角阻尼，防止无休止自转
-
-  // 1. 积分与边界约束
-  for (const b of bodies) {
-    b.vy += g * dt;
-    b.x += b.vx * dt;
-    b.y += b.vy * dt;
-    b.rot += b.vr * dt;
-    b.vx *= 0.998;
-    b.vr *= angularDamping; // 空气角阻尼
-
-    // 弹簧回弹模拟：让挤压形变平滑复原
-    const k = 140.0;
-    const d = 16.0;
-    b.vsx += (-k * (b.sx - 1.0) - d * b.vsx) * dt;
-    b.vsy += (-k * (b.sy - 1.0) - d * b.vsy) * dt;
-    b.sx += b.vsx * dt;
-    b.sy += b.vsy * dt;
-
-    // 左右墙壁反弹
-    if (b.x - b.r < 0) {
-      b.x = b.r;
-      b.vx = -b.vx * RESTITUTION;
-      b.vr = b.vy / b.r * 0.2; // 贴墙滑动轻微转动
-      b.sx = 0.88; b.sy = 1.12;
-    } else if (b.x + b.r > W) {
-      b.x = W - b.r;
-      b.vx = -b.vx * RESTITUTION;
-      b.vr = -b.vy / b.r * 0.2;
-      b.sx = 0.88; b.sy = 1.12;
-    }
-
-    // 地面接触与滚动
-    if (b.y + b.r > H) {
-      b.y = H - b.r;
-      if (Math.abs(b.vy) > 70 * SCALE) {
-        b.vy = -b.vy * RESTITUTION;
-        b.sx = 1.18; b.sy = 0.85;
-      } else {
-        b.vy = 0;
-      }
-      b.vx *= FRICTION;
-      // 物理真实滚动关系：角速度与水平线速度绑定 v = w * r
-      const targetVr = (b.vx / b.r) * 0.8;
-      b.vr = b.vr * 0.85 + targetVr * 0.15;
-      if (Math.abs(b.vx) < 3 * SCALE) {
-        b.vx = 0;
-        b.vr = 0; // 静止时彻底锁定自转
-      }
-    }
-  }
-
-  // 2. 刚体碰撞求解
-  let mergeCandidate = null;
-  const numBodies = bodies.length;
-
-  for (let i = 0; i < numBodies; i++) {
-    for (let j = i + 1; j < numBodies; j++) {
-      const a = bodies[i];
-      const b = bodies[j];
-      const dx = b.x - a.x;
-      const dy = b.y - a.y;
-      const dist = Math.hypot(dx, dy) || 0.001;
-      const minDist = a.r + b.r;
-
-      if (dist < minDist) {
-        // 发现相同水果碰撞合成
-        if (a.level === b.level && !mergeCandidate && a.level < FRUITS.length - 1) {
-          mergeCandidate = [a, b];
-        }
-
-        // 分离重叠
-        const overlap = minDist - dist;
-        const nx = dx / dist;
-        const ny = dy / dist;
-        const ma = a.r * a.r;
-        const mb = b.r * b.r;
-        const totalM = ma + mb;
-
-        a.x -= nx * overlap * (mb / totalM);
-        a.y -= ny * overlap * (ma / totalM);
-        b.x += nx * overlap * (ma / totalM);
-        b.y += ny * overlap * (ma / totalM);
-
-        // 法向冲量
-        const rvx = b.vx - a.vx;
-        const rvy = b.vy - a.vy;
-        const normalVel = rvx * nx + rvy * ny;
-
-        if (normalVel < 0) {
-          const impulse = -(1 + RESTITUTION) * normalVel / (1 / ma + 1 / mb);
-          a.vx -= impulse * nx / ma;
-          a.vy -= impulse * ny / ma;
-          b.vx += impulse * nx / mb;
-          b.vy += impulse * ny / mb;
-
-          // 弹性接触轻微挤压
-          if (Math.abs(normalVel) > 80 * SCALE) {
-            a.sx = 1.1; a.sy = 0.92;
-            b.sx = 1.1; b.sy = 0.92;
-          }
-
-          // 接触面滚动摩擦（带衰减与最大力矩限制，避免灵异自转）
-          const tx = -ny, ty = nx;
-          const tangentVel = rvx * tx + rvy * ty;
-          if (Math.abs(tangentVel) > 10 * SCALE) {
-            const rotImpulse = Math.min(Math.abs(tangentVel * 0.04), 2.5) * Math.sign(tangentVel);
-            a.vr += rotImpulse / a.r * 15;
-            b.vr -= rotImpulse / b.r * 15;
-          }
-        }
-      }
-    }
-  }
-
-  if (mergeCandidate) {
-    mergeFruit(mergeCandidate[0], mergeCandidate[1]);
-  }
-}
-
-/* ---------- 警戒线判定与失败检测 ---------- */
-function checkDanger(dt) {
-  const lineY = H * DANGER_RATIO;
-  const now = performance.now();
-  let inDanger = false;
-
-  for (const b of bodies) {
-    if (now - b.spawnTime < 900) continue;
-    const isStationary = Math.abs(b.vy) < 45 * SCALE;
-    if (b.y - b.r < lineY && isStationary) {
-      inDanger = true;
-      break;
-    }
-  }
-
-  if (inDanger) {
-    dangerTimer += dt * 1000;
-    lineEl.classList.add("flash");
-    if (dangerTimer > OVER_TIME) {
-      triggerGameOver();
-    }
-  } else {
-    dangerTimer = 0;
-    lineEl.classList.remove("flash");
-  }
-
-  if (comboCount > 0 && now - lastMergeTime > COMBO_TIMEOUT) {
-    comboCount = 0;
-    comboTag.classList.add("hidden");
-  }
-}
-
-function triggerGameOver() {
-  isGameOver = true;
-  isRunning = false;
-  finalEl.textContent = score;
-  finalBestEl.textContent = best;
-  bestTip.classList.toggle("hidden", score < best || score === 0);
-  overlay.classList.remove("hidden");
-}
-
-/* ---------- 2D 渲染系统 ---------- */
-function render() {
-  ctx.save();
-  ctx.clearRect(0, 0, W, H);
-
-  if (screenShake > 0) {
-    const ox = (Math.random() - 0.5) * screenShake;
-    const oy = (Math.random() - 0.5) * screenShake;
-    ctx.translate(ox, oy);
-  }
-
-  // 1. 瞄准虚线与顶部预览水果
-  if (isRunning && !isGameOver && aimX !== null && canDrop) {
-    const r = fruitRadius(curLevel);
-    const x = Math.max(r + 2, Math.min(W - r - 2, aimX));
-
-    ctx.save();
-    ctx.strokeStyle = "rgba(255, 255, 255, 0.65)";
-    ctx.setLineDash([6, 8]);
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.moveTo(x, r * 2 + 10);
-    ctx.lineTo(x, H - 4);
-    ctx.stroke();
-    ctx.restore();
-
-    renderFruit(curLevel, x, r + 6, r, 0, 1.0, 1.0, 1.0);
-  }
-
-  // 2. 绘制所有刚体水果
-  for (const b of bodies) {
-    renderFruit(b.level, b.x, b.y, b.r, b.rot, b.sx, b.sy, 1.0);
-  }
-
-  // 3. 冲击波光圈
-  for (const sw of shockwaves) {
-    ctx.save();
-    ctx.strokeStyle = `rgba(255, 255, 255, ${sw.alpha})`;
-    ctx.lineWidth = 3.5;
-    ctx.beginPath();
-    ctx.arc(sw.x, sw.y, sw.r, 0, Math.PI * 2);
-    ctx.stroke();
-    ctx.restore();
-  }
-
-  // 4. 粒子特效
-  for (const p of particles) {
-    ctx.save();
-    ctx.globalAlpha = Math.max(0, p.life);
-    ctx.fillStyle = p.color;
-    ctx.beginPath();
-    ctx.arc(p.x, p.y, p.size * p.life, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.restore();
-  }
-
-  ctx.restore();
-}
-
-function renderFruit(level, x, y, r, rot, sx, sy, alpha) {
-  const sprite = sprites[FRUITS[level].img];
-  if (!sprite || !sprite.complete) return;
-  ctx.save();
-  ctx.translate(x, y);
-  ctx.rotate(rot);
-  ctx.scale(sx, sy);
-  ctx.globalAlpha = alpha;
-  ctx.drawImage(sprite, -r, -r, r * 2, r * 2);
-  ctx.restore();
-}
-
-/* ---------- 游戏主循环 ---------- */
-let lastFrameTime = performance.now();
-function gameLoop(now) {
-  requestAnimationFrame(gameLoop);
-  const dt = Math.min((now - lastFrameTime) / 1000, 1 / 30);
-  lastFrameTime = now;
-
-  if (isRunning && !isGameOver) {
-    const subSteps = 8;
-    for (let step = 0; step < subSteps; step++) {
-      updatePhysics(dt / subSteps);
-    }
-    checkDanger(dt);
-  }
-
-  if (screenShake > 0) {
-    screenShake = Math.max(0, screenShake - dt * 25);
-  }
-
-  for (const sw of shockwaves) {
-    sw.r += (sw.maxR - sw.r) * dt * 10;
-    sw.alpha -= dt * 2.5;
-  }
-  shockwaves = shockwaves.filter(sw => sw.alpha > 0);
-
-  for (const p of particles) {
-    p.x += p.vx * dt;
-    p.y += p.vy * dt;
-    p.vy += 1100 * SCALE * dt;
-    p.life -= dt * p.decay;
-  }
-  particles = particles.filter(p => p.life > 0);
-
-  render();
-}
-
-/* ---------- 触控与鼠标交互系统 ---------- */
-function getPointerX(e) {
-  const rect = stageEl.getBoundingClientRect();
-  const pt = e.touches ? e.touches[0] : e;
-  return pt.clientX - rect.left;
-}
-
-let isPointerDown = false;
-stageEl.addEventListener("pointerdown", e => {
-  isPointerDown = true;
-  aimX = getPointerX(e);
-});
-
-stageEl.addEventListener("pointermove", e => {
-  if (isPointerDown || e.pointerType === "mouse") {
-    aimX = getPointerX(e);
-  }
-});
-
-window.addEventListener("pointerup", () => {
-  if (!isPointerDown) return;
-  isPointerDown = false;
-  if (isRunning && !isGameOver) {
-    performDrop(aimX ?? W / 2);
-  }
-});
-
-document.addEventListener("touchmove", e => e.preventDefault(), { passive: false });
-document.addEventListener("dblclick", e => e.preventDefault());
-
-/* ---------- 按钮事件绑定 ---------- */
-document.getElementById("start-btn").addEventListener("click", () => {
-  startOverlay.classList.add("hidden");
-  handleResize();
-  initGame();
-  isRunning = true;
-  getAudioContext();
-  playSound("drop");
-});
-
-document.getElementById("restart-btn").addEventListener("click", () => {
-  initGame();
-  isRunning = true;
-  playSound("drop");
-});
-
-soundBtn.addEventListener("click", () => {
-  audioEnabled = !audioEnabled;
-  soundBtn.textContent = audioEnabled ? "🔔" : "🔕";
-});
-
-helpBtn.addEventListener("click", () => {
-  alert("🍉 玩法说明：\n1. 滑动屏幕控制水果投放位置\n2. 相同水果碰撞会自动进化成更高阶水果\n3. 连续合成可获得 COMBO 连击额外加分\n4. 水果超出警戒线将结束游戏！");
-});
-
-/* ---------- 启动游戏引擎 ---------- */
-handleResize();
-requestAnimationFrame(gameLoop);
