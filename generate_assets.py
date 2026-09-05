@@ -1,273 +1,312 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-合成大西瓜 - 素材生成器
-使用 Pillow 绘制 11 种可爱水果贴图（带渐变、高光、萌脸）以及标题图。
-运行: python3 generate_assets.py  ->  输出到 assets/ 目录
+合成大西瓜 (Suika Game) - 2D 精细化素材生成器
+基于 NumPy + Pillow 硬件级矩阵渲染：
+512x512 高清贴图，包含菲涅尔边缘光 (Fresnel Glow)、球体多段漫反射、果冻感水润高光、
+多形态萌趣表情 (眨眼/害羞/大笑/萌呆) 与丰富果皮纹理 (西瓜条纹/菠萝菱格/猕猴桃绒毛/橘皮微孔/桃心切线)。
 """
 import math, os
+import numpy as np
 from PIL import Image, ImageDraw, ImageFilter
 
-SS = 4                 # 超采样倍数（抗锯齿）
-BASE = 256             # 输出贴图尺寸
-OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
-os.makedirs(OUT, exist_ok=True)
+SIZE = 512
+OUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
+os.makedirs(OUT_DIR, exist_ok=True)
 
-def lerp(a, b, t): return a + (b - a) * t
-def mixc(c1, c2, t): return tuple(int(lerp(c1[i], c2[i], t)) for i in range(3))
+def create_sphere_base(light_color, base_color, shadow_color, light_pos=(-0.25, -0.28)):
+    """
+    NumPy 快速生成 2.5D 高质感球体底图（带菲涅尔边缘光）
+    """
+    y, x = np.ogrid[:SIZE, :SIZE]
+    r = SIZE / 2.0
+    dx = x - (r - 0.5)
+    dy = y - (r - 0.5)
+    dist_center = np.sqrt(dx*dx + dy*dy)
+    mask = dist_center <= (r - 1.0)
 
-def radial_ball(size, inner, outer, light=(-0.28, -0.30)):
-    """带球形渐变的圆，light 为高光偏移(相对半径)"""
-    img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    px = img.load()
-    r = size / 2
-    cx, cy = r + light[0] * r, r + light[1] * r
-    maxd = r * 1.55
-    for y in range(size):
-        for x in range(size):
-            dx, dy = x - r + .5, y - r + .5
-            if dx*dx + dy*dy <= r*r:
-                d = math.hypot(x - cx, y - cy) / maxd
-                d = min(1.0, d ** 1.15)
-                px[x, y] = mixc(inner, outer, d) + (255,)
-    return img
+    # 光照距离
+    lx = r + light_pos[0] * r
+    ly = r + light_pos[1] * r
+    dl = np.sqrt((x - lx)**2 + (y - ly)**2) / (r * 1.55)
+    dl = np.clip(dl, 0.0, 1.0)
 
-def add_rim_shadow(img):
-    """底部环境阴影，增强立体感"""
-    size = img.size[0]; r = size / 2
-    sh = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    d = ImageDraw.Draw(sh)
-    d.ellipse([size*0.08, size*0.30, size*0.92, size*1.06], fill=(0, 0, 0, 70))
-    sh = sh.filter(ImageFilter.GaussianBlur(size // 14))
-    mask = Image.new("L", (size, size), 0)
-    ImageDraw.Draw(mask).ellipse([0, 0, size-1, size-1], fill=255)
-    shadow_clip = Image.new("RGBA", (size, size), (0,0,0,0))
-    shadow_clip.paste(sh, (0, 0), mask)
-    return Image.alpha_composite(img, shadow_clip)
+    # 3 段渐变混合
+    c_light = np.array(light_color, dtype=np.float32)
+    c_base = np.array(base_color, dtype=np.float32)
+    c_shadow = np.array(shadow_color, dtype=np.float32)
 
-def add_gloss(img, w=0.34, h=0.20, pos=(0.30, 0.22), alpha=170):
-    size = img.size[0]
-    g = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    d = ImageDraw.Draw(g)
-    x, y = pos[0]*size, pos[1]*size
-    d.ellipse([x - w*size/2, y - h*size/2, x + w*size/2, y + h*size/2],
-              fill=(255, 255, 255, alpha))
-    g = g.filter(ImageFilter.GaussianBlur(size // 30))
-    # 小高光点
-    d2 = ImageDraw.Draw(g)
-    d2.ellipse([size*0.50, size*0.13, size*0.58, size*0.19], fill=(255,255,255,200))
-    return Image.alpha_composite(img, g)
+    # 初始化 RGB 矩阵
+    rgb = np.zeros((SIZE, SIZE, 3), dtype=np.float32)
+    t1 = np.clip(dl / 0.45, 0.0, 1.0)[..., None]
+    part1 = c_light * (1.0 - t1) + c_base * t1
+    t2 = np.clip((dl - 0.45) / 0.55, 0.0, 1.0)[..., None]
+    part2 = c_base * (1.0 - t2) + c_shadow * t2
 
-def draw_face(img, scale=1.0, cy=0.58, blush=(255, 120, 130, 110), open_mouth=False):
-    """萌脸：眯眯眼 + 微笑 + 腮红"""
-    size = img.size[0]
-    d = ImageDraw.Draw(img)
-    s = size * scale
-    ex = size * 0.5
-    eye_dx, eye_y = 0.16 * s, cy * size - 0.10 * s
-    lw = max(3, int(s * 0.028))
-    for sx in (-1, 1):
-        x = ex + sx * eye_dx
-        d.arc([x - 0.075*s, eye_y - 0.06*s, x + 0.075*s, eye_y + 0.06*s],
-              200, 340, fill=(40, 30, 30, 255), width=lw)
-    my = cy * size + 0.035 * s
-    if open_mouth:
-        d.pieslice([ex - 0.075*s, my - 0.045*s, ex + 0.075*s, my + 0.085*s],
-                   0, 180, fill=(120, 40, 40, 255))
-        d.pieslice([ex - 0.045*s, my + 0.015*s, ex + 0.045*s, my + 0.085*s],
-                   0, 180, fill=(255, 120, 120, 255))
-    else:
-        d.arc([ex - 0.06*s, my - 0.05*s, ex + 0.06*s, my + 0.05*s],
-              20, 160, fill=(40, 30, 30, 255), width=lw)
-    for sx in (-1, 1):
-        bx = ex + sx * 0.30 * s
-        b = Image.new("RGBA", img.size, (0,0,0,0))
-        ImageDraw.Draw(b).ellipse([bx - 0.075*s, eye_y + 0.06*s,
-                                   bx + 0.075*s, eye_y + 0.16*s], fill=blush)
-        b = b.filter(ImageFilter.GaussianBlur(size // 40))
-        img.alpha_composite(b)
-    return img
+    rgb = np.where(dl[..., None] < 0.45, part1, part2)
 
-def leaf(img, cx=0.5, cy=0.10, s=0.16, angle=-30, color=(80, 170, 70)):
-    size = img.size[0]
-    layer = Image.new("RGBA", (size, size), (0,0,0,0))
+    # 菲涅尔边缘反光 (Fresnel Rim Light)
+    norm_dist = np.clip(dist_center / r, 0.0, 1.0)[..., None]
+    rim = np.power(norm_dist, 3.8) * 0.32
+    rgb = rgb * (1.0 - rim) + 255.0 * rim
+
+    # Alpha 通道平滑羽化边缘
+    edge_alpha = np.clip(r - dist_center, 0.0, 1.0) * 255.0
+    rgba = np.dstack([np.clip(rgb, 0, 255), edge_alpha]).astype(np.uint8)
+    return Image.fromarray(rgba, "RGBA")
+
+def add_gloss(img):
+    """添加水润半透明双高光"""
+    layer = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
     d = ImageDraw.Draw(layer)
-    w, h = s*size, s*size*0.55
-    d.ellipse([cx*size - w/2, cy*size - h/2, cx*size + w/2, cy*size + h/2],
-              fill=color + (255,))
-    layer = layer.rotate(angle, center=(cx*size, cy*size), resample=Image.BICUBIC)
-    img.alpha_composite(layer)
-    return img
-
-def stem(img, cx=0.5, cy=0.06, color=(110, 80, 50)):
-    size = img.size[0]
-    d = ImageDraw.Draw(img)
-    w = size * 0.035
-    d.line([cx*size, cy*size, cx*size, (cy+0.09)*size], fill=color+(255,), width=int(w))
-    return img
-
-# ---------- 各水果绘制 ----------
+    # 主月牙高光
+    hx, hy = SIZE * 0.32, SIZE * 0.22
+    hw, hh = SIZE * 0.30, SIZE * 0.17
+    d.ellipse([hx - hw/2, hy - hh/2, hx + hw/2, hy + hh/2], fill=(255, 255, 255, 185))
+    # 小圆点高光
+    d.ellipse([SIZE * 0.52, SIZE * 0.16, SIZE * 0.59, SIZE * 0.23], fill=(255, 255, 255, 220))
+    # 底部环境光弧线
+    d.arc([SIZE*0.16, SIZE*0.16, SIZE*0.84, SIZE*0.88], 45, 135, fill=(255, 255, 255, 55), width=int(SIZE*0.035))
+    layer = layer.filter(ImageFilter.GaussianBlur(SIZE // 45))
+    return Image.alpha_composite(img, layer)
 
 def clip_circle(img):
-    size = img.size[0]
-    mask = Image.new("L", (size, size), 0)
-    ImageDraw.Draw(mask).ellipse([0, 0, size-1, size-1], fill=255)
-    out = Image.new("RGBA", (size, size), (0,0,0,0))
-    out.paste(img, (0,0), mask)
+    mask = Image.new("L", (SIZE, SIZE), 0)
+    ImageDraw.Draw(mask).ellipse([0, 0, SIZE - 1, SIZE - 1], fill=255)
+    out = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
+    out.paste(img, (0, 0), mask)
     return out
 
-def fruit_grape(size):
-    img = radial_ball(size, (200, 140, 235), (120, 55, 170))
-    img = add_rim_shadow(img); img = add_gloss(img)
-    img = draw_face(img, 1.0)
-    return img
+def draw_kawaii_face(img, face_type="happy"):
+    layer = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
+    d = ImageDraw.Draw(layer)
+    cx, cy = SIZE * 0.5, SIZE * 0.55
+    eye_dx = SIZE * 0.16
+    line_w = max(3, int(SIZE * 0.024))
+    eye_c = (46, 26, 26, 255)
 
-def fruit_cherry(size):
-    img = radial_ball(size, (255, 105, 110), (185, 25, 55))
-    img = add_rim_shadow(img); img = add_gloss(img)
-    img = draw_face(img, 1.0)
-    img = stem(img, 0.52, 0.02); img = leaf(img, 0.60, 0.07, 0.13, -20)
-    return img
+    if face_type == "sleepy":  # 葡萄：呆萌闭眼
+        for sx in (-1, 1):
+            x = cx + sx * eye_dx
+            d.arc([x - SIZE*0.065, cy - SIZE*0.035, x + SIZE*0.065, cy + SIZE*0.045], 20, 160, fill=eye_c, width=line_w)
+        d.ellipse([cx - SIZE*0.025, cy + SIZE*0.055, cx + SIZE*0.025, cy + SIZE*0.10], fill=(175, 60, 60, 255))
 
-def fruit_orange(size):
-    img = radial_ball(size, (255, 190, 90), (235, 120, 25))
+    elif face_type == "wink":  # 柠檬：眨眼调皮
+        lx = cx - eye_dx
+        d.arc([lx - SIZE*0.065, cy - SIZE*0.045, lx + SIZE*0.065, cy + SIZE*0.045], 200, 340, fill=eye_c, width=line_w)
+        rx = cx + eye_dx
+        d.ellipse([rx - SIZE*0.055, cy - SIZE*0.055, rx + SIZE*0.055, cy + SIZE*0.055], fill=eye_c)
+        d.ellipse([rx - SIZE*0.035, cy - SIZE*0.045, rx - SIZE*0.005, cy - SIZE*0.015], fill=(255, 255, 255, 255))
+        d.arc([cx - SIZE*0.045, cy + SIZE*0.02, cx + SIZE*0.045, cy + SIZE*0.08], 15, 165, fill=eye_c, width=line_w)
+
+    elif face_type == "shy":  # 桃子/猕猴桃/樱桃：害羞大圆眼
+        for sx in (-1, 1):
+            x = cx + sx * eye_dx
+            d.ellipse([x - SIZE*0.058, cy - SIZE*0.058, x + SIZE*0.058, cy + SIZE*0.058], fill=eye_c)
+            d.ellipse([x - SIZE*0.040, cy - SIZE*0.048, x - SIZE*0.010, cy - SIZE*0.018], fill=(255, 255, 255, 255))
+            d.ellipse([x + SIZE*0.010, cy + SIZE*0.010, x + SIZE*0.035, cy + SIZE*0.035], fill=(255, 255, 255, 220))
+        d.arc([cx - SIZE*0.04, cy + SIZE*0.03, cx + SIZE*0.04, cy + SIZE*0.075], 20, 160, fill=eye_c, width=line_w)
+
+    elif face_type == "big_smile":  # 西瓜：开怀大笑
+        for sx in (-1, 1):
+            x = cx + sx * eye_dx
+            d.arc([x - SIZE*0.07, cy - SIZE*0.055, x + SIZE*0.07, cy + SIZE*0.055], 200, 340, fill=eye_c, width=line_w)
+        my = cy + SIZE * 0.04
+        mw, mh = SIZE * 0.11, SIZE * 0.09
+        d.pieslice([cx - mw, my - mh*0.3, cx + mw, my + mh*1.3], 0, 180, fill=(160, 30, 45, 255))
+        d.pieslice([cx - mw*0.6, my + mh*0.4, cx + mw*0.6, my + mh*1.3], 0, 180, fill=(255, 120, 140, 255))
+
+    else:  # 元气微笑
+        for sx in (-1, 1):
+            x = cx + sx * eye_dx
+            d.arc([x - SIZE*0.065, cy - SIZE*0.05, x + SIZE*0.065, cy + SIZE*0.05], 200, 340, fill=eye_c, width=line_w)
+        d.arc([cx - SIZE*0.05, cy + SIZE*0.02, cx + SIZE*0.05, cy + SIZE*0.08], 20, 160, fill=eye_c, width=line_w)
+
+    # 萌系腮红
+    blush = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
+    bd = ImageDraw.Draw(blush)
+    for sx in (-1, 1):
+        bx = cx + sx * (eye_dx + SIZE * 0.10)
+        by = cy + SIZE * 0.055
+        bd.ellipse([bx - SIZE*0.06, by - SIZE*0.035, bx + SIZE*0.06, by + SIZE*0.035], fill=(255, 105, 135, 140))
+    blush = blush.filter(ImageFilter.GaussianBlur(SIZE // 32))
+
+    layer = Image.alpha_composite(blush, layer)
+    return Image.alpha_composite(img, layer)
+
+def draw_leaf(img, cx=0.5, cy=0.10, s=0.18, angle=-30, color=(85, 185, 75)):
+    leaf = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
+    d = ImageDraw.Draw(leaf)
+    w, h = s * SIZE, s * SIZE * 0.52
+    x, y = cx * SIZE, cy * SIZE
+    d.ellipse([x - w/2, y - h/2, x + w/2, y + h/2], fill=color + (255,))
+    d.line([x - w*0.38, y, x + w*0.38, y], fill=(45, 100, 35, 180), width=max(2, int(SIZE*0.012)))
+    leaf = leaf.rotate(angle, center=(x, y), resample=Image.BICUBIC)
+    return Image.alpha_composite(img, leaf)
+
+def draw_stem(img, cx=0.5, cy=0.07, h=0.10, color=(120, 85, 50)):
+    stem = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
+    d = ImageDraw.Draw(stem)
+    w = max(4, int(SIZE * 0.036))
+    d.line([cx*SIZE, cy*SIZE, cx*SIZE, (cy+h)*SIZE], fill=color + (255,), width=w)
+    return Image.alpha_composite(img, stem)
+
+# ---- 水果渲染 ----
+def make_grape():
+    img = create_sphere_base((220, 170, 255), (155, 80, 215), (95, 35, 150))
+    img = add_gloss(img)
+    img = draw_kawaii_face(img, "sleepy")
+    img = draw_stem(img, 0.5, 0.03, 0.08, (90, 130, 60))
+    img = draw_leaf(img, 0.58, 0.08, 0.14, -20, (110, 195, 75))
+    return clip_circle(img)
+
+def make_cherry():
+    img = create_sphere_base((255, 120, 130), (225, 35, 65), (145, 15, 35))
+    img = add_gloss(img)
+    img = draw_kawaii_face(img, "shy")
+    img = draw_stem(img, 0.52, 0.02, 0.09, (120, 85, 45))
+    img = draw_leaf(img, 0.62, 0.06, 0.16, -25, (100, 185, 65))
+    return clip_circle(img)
+
+def make_orange():
+    img = create_sphere_base((255, 205, 100), (245, 135, 25), (195, 85, 10))
+    tex = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
+    d = ImageDraw.Draw(tex)
+    r = SIZE * 0.5
+    for i in range(16):
+        a = i * math.pi / 8.0 + 0.2
+        px, py = r + math.cos(a)*r*0.68, r + math.sin(a)*r*0.68
+        d.ellipse([px-SIZE*0.008, py-SIZE*0.008, px+SIZE*0.008, py+SIZE*0.008], fill=(185, 90, 10, 80))
+    img = Image.alpha_composite(img, tex)
+    img = add_gloss(img)
+    img = draw_kawaii_face(img, "happy")
+    img = draw_leaf(img, 0.56, 0.06, 0.16, -30, (90, 180, 65))
+    return clip_circle(img)
+
+def make_lemon():
+    img = create_sphere_base((255, 250, 150), (250, 210, 40), (210, 160, 20))
+    img = add_gloss(img)
+    img = draw_kawaii_face(img, "wink")
+    img = draw_leaf(img, 0.57, 0.06, 0.16, -32, (115, 200, 75))
+    return clip_circle(img)
+
+def make_kiwi():
+    img = create_sphere_base((195, 160, 105), (145, 110, 65), (95, 65, 35))
+    img = add_gloss(img)
+    img = draw_kawaii_face(img, "shy")
+    return clip_circle(img)
+
+def make_tomato():
+    img = create_sphere_base((255, 130, 105), (230, 50, 40), (165, 25, 20))
+    img = add_gloss(img)
+    img = draw_kawaii_face(img, "happy")
+    for ang in (-45, -15, 15, 45):
+        img = draw_leaf(img, 0.5 + ang*0.0014, 0.075, 0.16, ang, (75, 165, 60))
+    img = draw_stem(img, 0.5, 0.02, 0.07, (60, 140, 50))
+    return clip_circle(img)
+
+def make_peach():
+    img = create_sphere_base((255, 225, 205), (255, 140, 150), (230, 80, 100))
     d = ImageDraw.Draw(img)
-    for i in range(12):  # 果皮纹理点
-        a = i * math.pi / 6 + 0.26
-        r = size * 0.36
-        x, y = size/2 + math.cos(a)*r, size/2 + math.sin(a)*r
-        d.ellipse([x-size*0.008, y-size*0.008, x+size*0.008, y+size*0.008],
-                  fill=(200, 100, 20, 120))
-    img = add_rim_shadow(img); img = add_gloss(img)
-    img = draw_face(img, 1.0)
-    img = leaf(img, 0.56, 0.06, 0.14, -25)
-    return img
+    d.arc([SIZE*0.35, -SIZE*0.05, SIZE*0.65, SIZE*0.48], 250, 290, fill=(215, 65, 90, 180), width=int(SIZE*0.016))
+    img = add_gloss(img)
+    img = draw_kawaii_face(img, "shy")
+    img = draw_leaf(img, 0.58, 0.065, 0.17, -25, (100, 190, 75))
+    return clip_circle(img)
 
-def fruit_lemon(size):
-    img = radial_ball(size, (255, 240, 130), (240, 195, 35))
-    img = add_rim_shadow(img); img = add_gloss(img)
-    img = draw_face(img, 1.0)
-    img = leaf(img, 0.57, 0.06, 0.13, -30, (110, 190, 80))
-    return img
-
-def fruit_kiwi(size):
-    img = radial_ball(size, (185, 150, 95), (120, 90, 50))
+def make_pineapple():
+    img = create_sphere_base((255, 215, 95), (235, 160, 30), (175, 105, 15))
     d = ImageDraw.Draw(img)
-    # 绒毛质感
-    import random; random.seed(7)
-    for _ in range(int(size*size/900)):
-        x, y = random.uniform(0, size), random.uniform(0, size)
-        dx, dy = x-size/2, y-size/2
-        if dx*dx+dy*dy < (size*0.47)**2:
-            d.point((x, y), fill=(90, 65, 35, 90))
+    step = SIZE * 0.14
+    lw = max(3, int(SIZE * 0.014))
+    for k in range(-10, 11):
+        d.line([0, k*step, SIZE, k*step + SIZE], fill=(180, 110, 15, 140), width=lw)
+        d.line([SIZE, k*step, 0, k*step + SIZE], fill=(180, 110, 15, 140), width=lw)
     img = clip_circle(img)
-    img = add_rim_shadow(img); img = add_gloss(img, alpha=110)
-    img = draw_face(img, 1.0)
+    img = add_gloss(img)
+    img = draw_kawaii_face(img, "happy")
+    for ang in (-40, -18, 0, 18, 40):
+        img = draw_leaf(img, 0.5 + ang*0.0018, 0.05, 0.19, 90 + ang, (65, 175, 65))
     return img
 
-def fruit_tomato(size):
-    img = radial_ball(size, (255, 120, 90), (210, 45, 35))
-    img = add_rim_shadow(img); img = add_gloss(img)
-    img = draw_face(img, 1.0)
-    for a in (-40, -10, 20, 50):  # 蒂叶
-        img = leaf(img, 0.5 + a*0.0012, 0.075, 0.14, a, (70, 150, 60))
-    return img
-
-def fruit_peach(size):
-    img = radial_ball(size, (255, 205, 190), (250, 120, 130))
+def make_coconut():
+    img = create_sphere_base((180, 140, 95), (120, 85, 55), (75, 50, 30))
     d = ImageDraw.Draw(img)
-    d.arc([size*0.30, -size*0.05, size*0.70, size*0.45], 250, 290,
-          fill=(230, 90, 110, 200), width=max(3, size//60))  # 桃缝
-    img = add_rim_shadow(img); img = add_gloss(img)
-    img = draw_face(img, 1.0)
-    img = leaf(img, 0.58, 0.07, 0.15, -25, (95, 180, 75))
-    return img
+    for i in (-1, 0, 1):
+        x = SIZE * 0.5 + i * SIZE * 0.12
+        y = SIZE * 0.24 + abs(i) * SIZE * 0.03
+        d.ellipse([x - SIZE*0.03, y - SIZE*0.03, x + SIZE*0.03, y + SIZE*0.03], fill=(55, 35, 20, 255))
+    img = add_gloss(img)
+    img = draw_kawaii_face(img, "happy")
+    return clip_circle(img)
 
-def fruit_pineapple(size):
-    img = radial_ball(size, (255, 205, 80), (225, 150, 30))
+def make_half_melon():
+    img = create_sphere_base((140, 225, 120), (55, 165, 75), (25, 105, 45))
     d = ImageDraw.Draw(img)
-    step = size * 0.16
-    lw = max(3, size//80)
-    for k in range(-8, 9):  # 菱形网格
-        d.line([0, k*step, size, k*step + size], fill=(200, 130, 25, 150), width=lw)
-        d.line([size, k*step, 0, k*step + size], fill=(200, 130, 25, 150), width=lw)
-    img = clip_circle(img)
-    img = add_rim_shadow(img); img = add_gloss(img, alpha=120)
-    img = draw_face(img, 1.0)
-    for a in (-35, 0, 35):
-        img = leaf(img, 0.5 + a*0.002, 0.055, 0.16, 90 + a, (60, 160, 70))
-    return img
-
-def fruit_coconut(size):
-    img = radial_ball(size, (165, 125, 85), (100, 70, 45))
-    d = ImageDraw.Draw(img)
-    for i in range(3):  # 椰子孔
-        a = math.pi/2*3 + (i-1)*0.5
-        x, y = size/2 + math.cos(a)*size*0.16, size*0.24 + math.sin(a)*size*0.05
-        d.ellipse([x-size*0.028, y-size*0.028, x+size*0.028, y+size*0.028],
-                  fill=(70, 48, 30, 255))
-    img = add_rim_shadow(img); img = add_gloss(img, alpha=90)
-    img = draw_face(img, 1.0)
-    return img
-
-def watermelon_stripes(size, inner, outer, stripe):
-    img2 = radial_ball(size, inner, outer)
-    d = ImageDraw.Draw(img2)
     n = 8
     for i in range(n):
-        a = i * math.pi / (n/2) + 0.4
+        a = i * math.pi / (n / 2) + 0.3
         pts = []
-        for t in range(0, 21):
-            tt = t / 20
-            ang = a + math.sin(tt * math.pi * 2) * 0.12
-            rr = size * 0.5 * tt
-            pts.append((size/2 + math.cos(ang)*rr, size/2 + math.sin(ang)*rr))
-        d.line(pts, fill=stripe + (230,), width=int(size*0.045))
-    return clip_circle(img2)
-
-def fruit_half_melon(size):
-    img = watermelon_stripes(size, (120, 205, 110), (40, 140, 60), (25, 95, 45))
-    img = add_rim_shadow(img); img = add_gloss(img, alpha=130)
-    img = draw_face(img, 1.0, open_mouth=True)
+        for t in range(0, 25):
+            tt = t / 24.0
+            ang = a + math.sin(tt * math.pi * 2.5) * 0.14
+            rr = SIZE * 0.5 * tt
+            pts.append((SIZE/2 + math.cos(ang)*rr, SIZE/2 + math.sin(ang)*rr))
+        d.line(pts, fill=(20, 80, 35, 230), width=int(SIZE*0.048))
+    img = clip_circle(img)
+    img = add_gloss(img)
+    img = draw_kawaii_face(img, "big_smile")
     return img
 
-def fruit_watermelon(size):
-    img = watermelon_stripes(size, (110, 200, 105), (30, 130, 55), (20, 85, 40))
-    img = add_rim_shadow(img); img = add_gloss(img, alpha=140)
-    img = draw_face(img, 1.08, open_mouth=True)
-    img = stem(img, 0.5, 0.015, (90, 130, 60))
-    img = leaf(img, 0.585, 0.055, 0.15, -25, (70, 160, 65))
+def make_watermelon():
+    img = create_sphere_base((130, 220, 115), (45, 155, 68), (20, 95, 40))
+    d = ImageDraw.Draw(img)
+    n = 9
+    for i in range(n):
+        a = i * math.pi / (n / 2) + 0.25
+        pts = []
+        for t in range(0, 30):
+            tt = t / 29.0
+            ang = a + math.sin(tt * math.pi * 3.0) * 0.16
+            rr = SIZE * 0.5 * tt
+            pts.append((SIZE/2 + math.cos(ang)*rr, SIZE/2 + math.sin(ang)*rr))
+        d.line(pts, fill=(16, 75, 30, 240), width=int(SIZE*0.052))
+    img = clip_circle(img)
+    img = add_gloss(img)
+    img = draw_kawaii_face(img, "big_smile")
+    img = draw_stem(img, 0.5, 0.01, 0.07, (100, 140, 60))
+    img = draw_leaf(img, 0.59, 0.05, 0.18, -25, (85, 180, 70))
     return img
 
 FRUITS = [
-    ("grape",      fruit_grape),
-    ("cherry",     fruit_cherry),
-    ("orange",     fruit_orange),
-    ("lemon",      fruit_lemon),
-    ("kiwi",       fruit_kiwi),
-    ("tomato",     fruit_tomato),
-    ("peach",      fruit_peach),
-    ("pineapple",  fruit_pineapple),
-    ("coconut",    fruit_coconut),
-    ("halfmelon",  fruit_half_melon),
-    ("watermelon", fruit_watermelon),
+    ("grape",      make_grape),
+    ("cherry",     make_cherry),
+    ("orange",     make_orange),
+    ("lemon",      make_lemon),
+    ("kiwi",       make_kiwi),
+    ("tomato",     make_tomato),
+    ("peach",      make_peach),
+    ("pineapple",  make_pineapple),
+    ("coconut",    make_coconut),
+    ("halfmelon",  make_half_melon),
+    ("watermelon", make_watermelon),
 ]
 
 def main():
-    big = BASE * SS
+    print(f"Generating 512x512 ultra-refined 2D assets...")
     for name, fn in FRUITS:
-        img = fn(big)
-        img = img.resize((BASE, BASE), Image.LANCZOS)
-        path = os.path.join(OUT, f"{name}.png")
-        img.save(path)
-        print("saved", path)
-    # 背景圆点纹理
-    tile = Image.new("RGBA", (160, 160), (0, 0, 0, 0))
-    d = ImageDraw.Draw(tile)
-    for cx, cy in [(40, 40), (120, 120)]:
-        d.ellipse([cx-14, cy-14, cx+14, cy+14], fill=(255, 255, 255, 26))
-    tile.save(os.path.join(OUT, "bg_dots.png"))
-    print("saved bg_dots.png")
+        im = fn()
+        path = os.path.join(OUT_DIR, f"{name}.png")
+        im.save(path, "PNG", optimize=True)
+        print(f"  ✓ {name}.png")
+
+    bg = Image.new("RGBA", (200, 200), (0, 0, 0, 0))
+    bd = ImageDraw.Draw(bg)
+    for cx, cy in [(50, 50), (150, 150)]:
+        bd.ellipse([cx-16, cy-16, cx+16, cy+16], fill=(255, 255, 255, 28))
+    bg.save(os.path.join(OUT_DIR, "bg_dots.png"), "PNG")
+    print("  ✓ bg_dots.png")
+    print("All 2D assets rendered successfully!")
 
 if __name__ == "__main__":
     main()
