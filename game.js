@@ -16,13 +16,18 @@
   const I = {};
   FRUITS.forEach(f => { const i=new Image(); i.src=`assets/${f.img}.png`; I[f.img]=i; });
 
+  // 某些 App 内嵌 WebView 可能关闭 DOM Storage；存档失败绝不能阻断游戏启动。
+  const store={
+    get(key,fallback=0){try{return +(localStorage.getItem(key)||fallback);}catch(_){return fallback;}},
+    set(key,value){try{localStorage.setItem(key,String(value));}catch(_){/* 无痕/受限 WebView：仅本次会话保留 */}}
+  };
   let W=0,H=0,D=1, stage={x:10,y:116,w:0,h:0}, bodies=[], particles=[], waves=[], buttons=[];
-  let screen='start', running=false, score=0, coins=+(localStorage.getItem('suika_coins')||0), best=+(localStorage.getItem('suika_best_v3')||0);
+  let screen='start', running=false, score=0, coins=store.get('suika_coins'), best=store.get('suika_best_v3');
   let earned=0, current=0, next=0, aimX=0, canDrop=true, danger=0, hammer=false, combo=0, lastMerge=0, shake=0, pointerDown=false, last=performance.now();
   const ui={ font:'system-ui,-apple-system,"PingFang SC","Microsoft YaHei",sans-serif' };
 
   function resize(){
-    D=Math.min(devicePixelRatio||1,3); W=innerWidth; H=innerHeight; C.width=W*D; C.height=H*D; X.setTransform(D,0,0,D,0,0);
+    D=Math.min(devicePixelRatio||1,3); W=innerWidth; H=innerHeight; C.width=W*D; C.height=H*D; X.setTransform(D,0,0,D,0,0); X.imageSmoothingEnabled=true; X.imageSmoothingQuality='high';
     // 预留道具栏(46px)、图鉴(39px)及间距，避免矮屏幕下 HUD / 道具栏互相覆盖。
     const top=116, toolBar=46, evolution=39, safeGap=14;
     stage={x:10,y:top,w:W-20,h:Math.max(100,H-top-toolBar-evolution-safeGap)}; aimX=W/2;
@@ -30,38 +35,72 @@
   }
   function radius(l){ return FRUITS[l].r*stage.w*.5; }
   function rand(){ const a=[32,28,20,12,8]; let q=Math.random()*100; for(let i=0;i<a.length;i++){q-=a[i];if(q<0)return i;}return 0; }
-  function body(l,x,y,merge=false){ return {level:l,x,y,r:radius(l),vx:0,vy:0,sx:merge?1.35:.88,sy:merge?.75:1.12,vsx:0,vsy:0,born:performance.now()}; }
+  function body(l,x,y,merge=false){ return {level:l,x,y,r:radius(l),vx:0,vy:0,sx:merge?1.12:.96,sy:merge?.90:1.04,vsx:0,vsy:0,born:performance.now()}; }
   function reset(){ bodies=[];particles=[];waves=[];score=0;earned=0;combo=0;danger=0;hammer=false;current=rand();next=rand();aimX=W/2;canDrop=true;running=true;screen='game'; }
-  function saveCoins(){localStorage.setItem('suika_coins',coins);}
+  function saveCoins(){store.set('suika_coins',coins);}
   function addCoins(n,x,y){ coins+=n;earned+=n;saveCoins(); floatText(x,y,`+${n} 💰`,'#f39c12'); }
 
-  // ------- 物理：无旋转模型，位置+速度+弹簧缩放 -------
+  // ------- 物理：稳定、自然的无旋转软碰撞模型 -------
   function physics(dt){
-    const g=2350*(stage.w/460), floor=stage.y+stage.h;
-    for(const b of bodies){
-      b.vy+=g*dt; b.x+=b.vx*dt;b.y+=b.vy*dt;b.vx*=.996;
-      // Q 弹形变回正
-      b.vsx+=(-145*(b.sx-1)-17*b.vsx)*dt; b.vsy+=(-145*(b.sy-1)-17*b.vsy)*dt;b.sx+=b.vsx*dt;b.sy+=b.vsy*dt;
-      if(b.x-b.r<stage.x){b.x=stage.x+b.r;b.vx=Math.abs(b.vx)*.16;b.sx=.9;b.sy=1.1;}
-      if(b.x+b.r>stage.x+stage.w){b.x=stage.x+stage.w-b.r;b.vx=-Math.abs(b.vx)*.16;b.sx=.9;b.sy=1.1;}
-      if(b.y+b.r>floor){b.y=floor-b.r;if(Math.abs(b.vy)>55)b.vy=-b.vy*.16;else b.vy=0;b.vx*=.96;if(Math.abs(b.vx)<2)b.vx=0;b.sx=1.13;b.sy=.89;}
+    const gravity=2050*(stage.w/460), floor=stage.y+stage.h;
+    const bodyCount=bodies.length;
+
+    // 积分、边界和果冻回弹。缩放范围被限制，眼睛不会再被夸张拉扯。
+    for(let i=0;i<bodyCount;i++){
+      const b=bodies[i];
+      b.vy+=gravity*dt;
+      b.x+=b.vx*dt; b.y+=b.vy*dt;
+      b.vx*=0.997;
+      b.vsx+=(-120*(b.sx-1)-18*b.vsx)*dt;
+      b.vsy+=(-120*(b.sy-1)-18*b.vsy)*dt;
+      b.sx=Math.max(.93,Math.min(1.10,b.sx+b.vsx*dt));
+      b.sy=Math.max(.93,Math.min(1.10,b.sy+b.vsy*dt));
+
+      if(b.x-b.r<stage.x){ b.x=stage.x+b.r; b.vx=Math.abs(b.vx)*.26; b.sx=.96; b.sy=1.04; }
+      else if(b.x+b.r>stage.x+stage.w){ b.x=stage.x+stage.w-b.r; b.vx=-Math.abs(b.vx)*.26; b.sx=.96; b.sy=1.04; }
+      if(b.y+b.r>floor){
+        b.y=floor-b.r;
+        if(Math.abs(b.vy)>62){ b.vy=-b.vy*.28; b.sx=1.075; b.sy=.94; }
+        else b.vy=0;
+        b.vx*=.95;
+        if(Math.abs(b.vx)<2) b.vx=0;
+      }
     }
+
     let merging=null;
-    for(let i=0;i<bodies.length;i++)for(let j=i+1;j<bodies.length;j++){
-      const a=bodies[i],b=bodies[j],dx=b.x-a.x,dy=b.y-a.y,dist=Math.hypot(dx,dy)||.01,min=a.r+b.r;
-      if(dist>=min)continue;
-      if(a.level===b.level&&!merging&&a.level<10) merging=[a,b];
-      const nx=dx/dist,ny=dy/dist,over=min-dist,ma=a.r*a.r,mb=b.r*b.r,sum=ma+mb;
-      a.x-=nx*over*(mb/sum);a.y-=ny*over*(mb/sum);b.x+=nx*over*(ma/sum);b.y+=ny*over*(ma/sum);
-      const rvx=b.vx-a.vx,rvy=b.vy-a.vy,vn=rvx*nx+rvy*ny;
-      if(vn<0){const p=-(1.16)*vn/(1/ma+1/mb);a.vx-=p*nx/ma;a.vy-=p*ny/ma;b.vx+=p*nx/mb;b.vy+=p*ny/mb;a.sx=b.sx=1.07;a.sy=b.sy=.94;}
+    // O(n²) 对当前游戏最大物体数（约 35）比空间哈希更快，且零分配、缓存友好。
+    for(let i=0;i<bodyCount;i++){
+      const a=bodies[i];
+      for(let j=i+1;j<bodyCount;j++){
+        const b=bodies[j], dx=b.x-a.x, dy=b.y-a.y;
+        const distance=Math.hypot(dx,dy)||.001, target=a.r+b.r;
+        if(distance>=target) continue;
+        if(a.level===b.level && !merging && a.level<FRUITS.length-1) merging=[a,b];
+
+        const nx=dx/distance, ny=dy/distance;
+        // 留出极小的软接触余量：不突兀弹开，也不会持续交叠抖动。
+        const penetration=Math.max(0,target-distance-.65);
+        const ma=a.r*a.r, mb=b.r*b.r, invMass=1/ma+1/mb;
+        a.x-=nx*penetration*(mb/(ma+mb)); a.y-=ny*penetration*(mb/(ma+mb));
+        b.x+=nx*penetration*(ma/(ma+mb)); b.y+=ny*penetration*(ma/(ma+mb));
+
+        const relativeNormal=(b.vx-a.vx)*nx+(b.vy-a.vy)*ny;
+        if(relativeNormal<0){
+          // 高速碰撞才有明显弹性，低速堆叠自然贴合，避免“硬塑料撞击”。
+          const restitution=Math.abs(relativeNormal)>100?.34:.07;
+          const impulse=-(1+restitution)*relativeNormal/invMass;
+          a.vx-=impulse*nx/ma; a.vy-=impulse*ny/ma;
+          b.vx+=impulse*nx/mb; b.vy+=impulse*ny/mb;
+          if(Math.abs(relativeNormal)>55){ a.sx=b.sx=1.045; a.sy=b.sy=.96; }
+        }
+      }
     }
-    if(merging) merge(...merging);
+    if(merging) merge(merging[0],merging[1]);
   }
   function merge(a,b){
     bodies=bodies.filter(v=>v!==a&&v!==b);const l=a.level+1,x=(a.x+b.x)/2,y=(a.y+b.y)/2,n=body(l,x,y,true);n.vy=-90;bodies.push(n);
     const now=performance.now();combo=now-lastMerge<1500?combo+1:1;lastMerge=now;
-    const gain=FRUITS[l].score*(combo>1?combo:1);score+=gain;if(score>best){best=score;localStorage.setItem('suika_best_v3',best);}
+    const gain=FRUITS[l].score*(combo>1?combo:1);score+=gain;if(score>best){best=score;store.set('suika_best_v3',best);}
     const coinGain=Math.max(1,Math.ceil(FRUITS[l].score/16))+(combo>1?combo-1:0);addCoins(coinGain,x,y-20);floatText(x,y-n.r,combo>1?`+${gain}  COMBO×${combo}`:`+${gain}`,'#ff4b1f');burst(x,y,l);waves.push({x,y,r:n.r*.45,max:n.r*2.3,a:.8});shake=Math.min(9,shake+2+l*.5);
   }
   function drop(){if(!canDrop||!running)return;const r=radius(current),x=Math.max(stage.x+r,Math.min(stage.x+stage.w-r,aimX));bodies.push(body(current,x,stage.y+r+4));current=next;next=rand();canDrop=false;setTimeout(()=>canDrop=true,340);}
@@ -128,7 +167,13 @@
   function buyFruit(l){const f=FRUITS[l];if(coins<f.price)return;coins-=f.price;saveCoins();current=l;screen='game';}
   function buyProp(type,cost){if(!running||coins<cost)return;coins-=cost;saveCoins();if(type==='hammer'){hammer=!hammer;}else doShake();}
   function render(){buttons=[];drawBackground();if(screen==='game'){drawHud();drawStage();drawBottom();drawEvolution();}else if(screen==='start')drawStart();else if(screen==='over')drawOver();else if(screen==='shop'){drawHud();drawStage();drawBottom();drawEvolution();drawShop();}}
-  function update(dt){if(running&&screen==='game'){for(let i=0;i<6;i++)physics(dt/6);checkLose(dt);}particles.forEach(p=>{p.y+=(p.vy||0)*dt;if(!p.text){p.x+=p.vx*dt;p.vy+=900*dt;}if(p.spin)p.spin*=.985;p.life-=dt*(p.text?.85:1.55);});particles=particles.filter(p=>p.life>0);waves.forEach(w=>{w.r+=(w.max-w.r)*dt*9;w.a-=dt*2.5;});waves=waves.filter(w=>w.a>0);shake=Math.max(0,shake-dt*28);}
+  function update(dt){if(running&&screen==='game'){
+      // 常规 4 子步，只有高速下落时升到 6 子步：保持自然碰撞的同时降低移动端 CPU 占用。
+      let fastest=0; for(let i=0;i<bodies.length;i++) fastest=Math.max(fastest,Math.abs(bodies[i].vy));
+      const steps=fastest>800?6:4;
+      for(let i=0;i<steps;i++) physics(dt/steps);
+      checkLose(dt);
+    }particles.forEach(p=>{p.y+=(p.vy||0)*dt;if(!p.text){p.x+=p.vx*dt;p.vy+=900*dt;}if(p.spin)p.spin*=.985;p.life-=dt*(p.text?.85:1.55);});particles=particles.filter(p=>p.life>0);waves.forEach(w=>{w.r+=(w.max-w.r)*dt*9;w.a-=dt*2.5;});waves=waves.filter(w=>w.a>0);shake=Math.max(0,shake-dt*28);}
   function loop(t){const dt=Math.min(.033,(t-last)/1000);last=t;update(dt);render();requestAnimationFrame(loop);}
 
   function point(e){const r=C.getBoundingClientRect();return {x:e.clientX-r.left,y:e.clientY-r.top};}
