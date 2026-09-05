@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#ffe29a">
+<title>合成大西瓜 🍉</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="app">
+    <header id="hud">
+      <div class="hud-box score-box">
+        <span class="hud-label">得分</span>
+        <span id="score">0</span>
+      </div>
+      <h1 id="title">合成大西瓜</h1>
+      <div class="hud-box best-box">
+        <span class="hud-label">最佳</span>
+        <span id="best">0</span>
+      </div>
+    </header>
+
+    <div id="next-bar">
+      <span>下一个</span>
+      <img id="next-img" alt="下一个水果" src="">
+    </div>
+
+    <div id="stage">
+      <canvas id="game"></canvas>
+      <div id="danger-line"></div>
+    </div>
+
+    <div id="evolution">
+      <!-- 进化链由 JS 填充 -->
+    </div>
+
+    <div id="overlay" class="hidden">
+      <div class="panel">
+        <h2 id="over-title">游戏结束</h2>
+        <p>本局得分 <b id="final-score">0</b></p>
+        <p id="best-tip" class="hidden">🎉 新纪录！</p>
+        <button id="restart-btn">再来一局</button>
+      </div>
+    </div>
+
+    <div id="start-overlay">
+      <div class="panel">
+        <h2>🍉 合成大西瓜</h2>
+        <p>点按或拖动屏幕放下水果，<br>两个相同的水果会合成更大的！<br>合成出大西瓜吧！</p>
+        <button id="start-btn">开始游戏</button>
+      </div>
+    </div>
+  </div>
+  <script src="game.js"></script>
+</body>
+</html>

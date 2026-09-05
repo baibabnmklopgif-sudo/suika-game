@@ -1,0 +1,186 @@
+/* ===== 合成大西瓜 样式 ===== */
+* { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+html, body {
+  height: 100%;
+  overflow: hidden;
+  overscroll-behavior: none;
+  touch-action: none;
+  font-family: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+body {
+  background: linear-gradient(180deg, #ffe9a8 0%, #ffd77a 45%, #ffc86b 100%);
+  background-attachment: fixed;
+}
+body::before {
+  content: "";
+  position: fixed; inset: 0;
+  background: url("assets/bg_dots.png") repeat;
+  background-size: 120px;
+  pointer-events: none;
+  z-index: 0;
+}
+
+#app {
+  position: relative;
+  z-index: 1;
+  height: 100%;
+  max-width: 520px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  padding: env(safe-area-inset-top) env(safe-area-inset-right)
+           env(safe-area-inset-bottom) env(safe-area-inset-left);
+}
+
+/* ---- 顶部 HUD ---- */
+#hud {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px 4px;
+}
+#title {
+  font-size: clamp(18px, 5vw, 26px);
+  color: #b4471f;
+  text-shadow: 0 2px 0 rgba(255,255,255,.6);
+  letter-spacing: 2px;
+}
+.hud-box {
+  min-width: 74px;
+  padding: 6px 12px;
+  background: rgba(255,255,255,.75);
+  border: 2px solid #f7b24a;
+  border-radius: 16px;
+  text-align: center;
+  box-shadow: 0 3px 0 rgba(190,110,20,.25);
+}
+.hud-label { display:block; font-size: 11px; color: #b06a1a; }
+#score, #best {
+  font-size: 20px;
+  font-weight: 800;
+  color: #d2571e;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- 下一个水果 ---- */
+#next-bar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 2px 0 6px;
+  color: #a05c14;
+  font-size: 13px;
+}
+#next-img {
+  width: 34px; height: 34px;
+  filter: drop-shadow(0 2px 2px rgba(0,0,0,.2));
+  animation: bob 1.6s ease-in-out infinite;
+}
+@keyframes bob { 50% { transform: translateY(-3px); } }
+
+/* ---- 游戏舞台 ---- */
+#stage {
+  position: relative;
+  flex: 1;
+  margin: 0 12px 10px;
+  border-radius: 22px 22px 26px 26px;
+  background: linear-gradient(180deg, rgba(255,255,255,.35), rgba(255,255,255,.15));
+  border: 3px solid rgba(214,142,44,.8);
+  border-top-color: rgba(214,142,44,.35);
+  box-shadow: inset 0 -6px 12px rgba(190,110,20,.18), 0 6px 18px rgba(160,90,10,.22);
+  overflow: hidden;
+}
+#game { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+
+#danger-line {
+  position: absolute;
+  left: 0; right: 0;
+  border-top: 2px dashed rgba(220, 60, 60, .55);
+  pointer-events: none;
+  transition: opacity .3s;
+}
+#danger-line.flash { animation: flash .5s linear infinite; }
+@keyframes flash { 50% { opacity: .15; } }
+
+/* ---- 进化链 ---- */
+#evolution {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 2px;
+  padding: 0 10px calc(10px + env(safe-area-inset-bottom));
+}
+#evolution img {
+  height: clamp(16px, 5.5vw, 30px);
+  width: auto;
+  filter: drop-shadow(0 1px 1px rgba(0,0,0,.2));
+}
+#evolution .arrow { color: #b06a1a; font-size: 10px; }
+
+/* ---- 弹层 ---- */
+#overlay, #start-overlay {
+  position: fixed; inset: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(60, 30, 0, .45);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+}
+.hidden { display: none !important; }
+
+.panel {
+  width: min(82vw, 340px);
+  padding: 28px 24px;
+  background: linear-gradient(180deg, #fffef2, #ffedc4);
+  border: 3px solid #f0a63c;
+  border-radius: 24px;
+  text-align: center;
+  box-shadow: 0 10px 30px rgba(0,0,0,.35);
+  animation: pop .35s cubic-bezier(.2, 1.6, .4, 1);
+}
+@keyframes pop { from { transform: scale(.6); opacity: 0; } }
+.panel h2 { color: #c14e18; font-size: 26px; margin-bottom: 12px; }
+.panel p { color: #8a5a20; font-size: 15px; line-height: 1.7; margin-bottom: 8px; }
+.panel #final-score { font-size: 24px; color: #d2571e; }
+#best-tip { color: #e0392f !important; font-weight: 700; }
+
+.panel button {
+  margin-top: 10px;
+  padding: 12px 36px;
+  font-size: 18px;
+  font-weight: 700;
+  color: #fff;
+  background: linear-gradient(180deg, #ff9d47, #f2701d);
+  border: none;
+  border-radius: 999px;
+  box-shadow: 0 4px 0 #c85712, 0 8px 14px rgba(0,0,0,.2);
+  cursor: pointer;
+  transition: transform .08s;
+}
+.panel button:active { transform: translateY(3px); box-shadow: 0 1px 0 #c85712; }
+
+/* 得分飘字 */
+.float-score {
+  position: absolute;
+  z-index: 15;
+  font-weight: 800;
+  color: #ff5722;
+  text-shadow: 0 1px 0 #fff, 0 2px 6px rgba(0,0,0,.25);
+  pointer-events: none;
+  animation: rise .8s ease-out forwards;
+}
+@keyframes rise {
+  from { transform: translate(-50%, 0) scale(.7); opacity: 1; }
+  to   { transform: translate(-50%, -46px) scale(1.15); opacity: 0; }
+}
+
+@media (min-width: 600px) {
+  #stage { margin: 0 24px 12px; }
+}
