@@ -1,5 +1,6 @@
 /* ===================================================================
  *  合成大西瓜 · Unified 2D Physics & Animation Engine
+ *  - 真实滚动物理 (Rolling Physics & High Angular Damping - 杜绝幽灵自转)
  *  - 2.5D 弹力软体变形 (Squish & Spring-Damper)
  *  - 8-子步高精度圆体刚体碰撞解算器 (Zero-tunneling Impulse Solver)
  *  - 冲击波涟漪 (Shockwave) & 屏幕震动 (Screen Shake)
@@ -25,8 +26,8 @@ const FRUITS = [
 
 const MAX_DROP_LEVEL = 4;        // 掉落仅出前 5 种基础水果
 const GRAVITY = 2700;            // px/s² (基于标准宽 480px)
-const RESTITUTION = 0.22;        // 弹性恢复系数
-const FRICTION = 0.982;          // 滚动摩擦
+const RESTITUTION = 0.20;        // 弹性恢复系数
+const FRICTION = 0.985;          // 地面滚动阻尼
 const DROP_COOLDOWN = 360;       // 掉落冷却 (ms)
 const DANGER_RATIO = 0.17;       // 警戒线高度比例
 const OVER_TIME = 1200;          // 警戒线上超时判负 (ms)
@@ -121,7 +122,6 @@ function playSound(type, param = 0) {
         osc.stop(now + i * 0.03 + 0.14);
       });
     } else if (type === "watermelon") {
-      // 大西瓜合成胜利和弦
       const chord = [523.25, 659.25, 783.99, 1046.50];
       chord.forEach((f, i) => {
         const osc = actx.createOscillator();
@@ -157,7 +157,6 @@ function handleResize() {
   SCALE = W / 480;
   lineEl.style.top = `${H * DANGER_RATIO}px`;
 
-  // 防止视口变动时水果越界
   for (const b of bodies) {
     b.r = fruitRadius(b.level);
     b.x = Math.max(b.r, Math.min(W - b.r, b.x));
@@ -212,11 +211,11 @@ function createBody(level, x, y, isMerge = false) {
     r,
     x, y,
     vx: 0, vy: 0,
-    rot: (Math.random() - 0.5) * 0.4,
-    vr: 0,
+    rot: 0,              // 初始角度自然端正
+    vr: 0,               // 初始角速度为 0
     // 弹力形变动画系统 (Spring Squash & Stretch)
-    sx: isMerge ? 1.4 : 0.8,
-    sy: isMerge ? 0.7 : 1.2,
+    sx: isMerge ? 1.35 : 0.85,
+    sy: isMerge ? 0.75 : 1.15,
     vsx: 0, vsy: 0,
     spawnTime: performance.now(),
   };
@@ -248,7 +247,7 @@ function performDrop(targetX) {
   const r = fruitRadius(curLevel);
   const x = Math.max(r + 2, Math.min(W - r - 2, targetX));
   const body = createBody(curLevel, x, r + 6, false);
-  body.vy = 50 * SCALE;
+  body.vy = 60 * SCALE;
   bodies.push(body);
 
   playSound("drop");
@@ -268,15 +267,12 @@ function mergeFruit(a, b) {
   const mx = (a.x + b.x) / 2;
   const my = (a.y + b.y) / 2;
 
-  // 移除旧水果
   bodies = bodies.filter(item => item !== a && item !== b);
 
-  // 创建新水果
   const nb = createBody(nextLv, mx, my, true);
   nb.vy = -140 * SCALE;
   bodies.push(nb);
 
-  // 连击计算
   const now = performance.now();
   if (now - lastMergeTime < COMBO_TIMEOUT) {
     comboCount++;
@@ -285,7 +281,6 @@ function mergeFruit(a, b) {
   }
   lastMergeTime = now;
 
-  // 基础分 + 连击额外加成
   const baseScore = FRUITS[nextLv].score;
   const comboMultiplier = comboCount > 1 ? comboCount : 1;
   const finalGain = baseScore * comboMultiplier;
@@ -298,11 +293,9 @@ function mergeFruit(a, b) {
     comboTag.classList.remove("hidden");
   }
 
-  // 飘字与粒子
   spawnFloatScore(mx, my - nb.r, comboCount > 1 ? `+${finalGain} (x${comboCount})` : `+${finalGain}`);
   spawnSplashParticles(mx, my, nextLv);
 
-  // 冲击波与震动
   shockwaves.push({ x: mx, y: my, r: nb.r * 0.5, maxR: nb.r * 2.8, alpha: 0.8 });
   screenShake = Math.min(14, screenShake + 3 + nextLv * 0.8);
   vibrate(Math.min(60, 20 + nextLv * 5));
@@ -314,7 +307,6 @@ function mergeFruit(a, b) {
     playSound("merge", nextLv + (comboCount - 1));
   }
 
-  // 更新最高分
   if (score > best) {
     best = score;
     bestEl.textContent = best;
@@ -327,7 +319,7 @@ function spawnFloatScore(x, y, text) {
   el.className = "float-score";
   el.textContent = text;
   el.style.left = `${x}px`;
-  el.style.top = `${y}px`;
+  el.style.top  = `${y}px`;
   stageEl.appendChild(el);
   setTimeout(() => el.remove(), 850);
 }
@@ -356,21 +348,23 @@ function celebrateWatermelon(x, y) {
   }
 }
 
-/* ---------- 统一 2D 物理与弹力解算器 ---------- */
+/* ---------- 统一 2D 物理与真实旋转解算 ---------- */
 function updatePhysics(dt) {
   const g = GRAVITY * SCALE;
+  const angularDamping = Math.pow(0.005, dt); // 极强的角阻尼，防止无休止自转
 
-  // 1. 积分与边界
+  // 1. 积分与边界约束
   for (const b of bodies) {
     b.vy += g * dt;
     b.x += b.vx * dt;
     b.y += b.vy * dt;
     b.rot += b.vr * dt;
     b.vx *= 0.998;
+    b.vr *= angularDamping; // 空气角阻尼
 
     // 弹簧回弹模拟：让挤压形变平滑复原
-    const k = 140.0;    // 劲度系数
-    const d = 16.0;     // 阻尼系数
+    const k = 140.0;
+    const d = 16.0;
     b.vsx += (-k * (b.sx - 1.0) - d * b.vsx) * dt;
     b.vsy += (-k * (b.sy - 1.0) - d * b.vsy) * dt;
     b.sx += b.vsx * dt;
@@ -380,24 +374,32 @@ function updatePhysics(dt) {
     if (b.x - b.r < 0) {
       b.x = b.r;
       b.vx = -b.vx * RESTITUTION;
-      b.sx = 0.85; b.sy = 1.15; // 侧面撞击挤压
+      b.vr = b.vy / b.r * 0.2; // 贴墙滑动轻微转动
+      b.sx = 0.88; b.sy = 1.12;
     } else if (b.x + b.r > W) {
       b.x = W - b.r;
       b.vx = -b.vx * RESTITUTION;
-      b.sx = 0.85; b.sy = 1.15;
+      b.vr = -b.vy / b.r * 0.2;
+      b.sx = 0.88; b.sy = 1.12;
     }
 
-    // 地面反弹
+    // 地面接触与滚动
     if (b.y + b.r > H) {
       b.y = H - b.r;
       if (Math.abs(b.vy) > 70 * SCALE) {
         b.vy = -b.vy * RESTITUTION;
-        b.sx = 1.22; b.sy = 0.82; // 触底挤压
+        b.sx = 1.18; b.sy = 0.85;
       } else {
         b.vy = 0;
       }
       b.vx *= FRICTION;
-      b.vr *= 0.94;
+      // 物理真实滚动关系：角速度与水平线速度绑定 v = w * r
+      const targetVr = (b.vx / b.r) * 0.8;
+      b.vr = b.vr * 0.85 + targetVr * 0.15;
+      if (Math.abs(b.vx) < 3 * SCALE) {
+        b.vx = 0;
+        b.vr = 0; // 静止时彻底锁定自转
+      }
     }
   }
 
@@ -429,11 +431,11 @@ function updatePhysics(dt) {
         const totalM = ma + mb;
 
         a.x -= nx * overlap * (mb / totalM);
-        a.y -= ny * overlap * (mb / totalM);
+        a.y -= ny * overlap * (ma / totalM);
         b.x += nx * overlap * (ma / totalM);
         b.y += ny * overlap * (ma / totalM);
 
-        // 冲量计算
+        // 法向冲量
         const rvx = b.vx - a.vx;
         const rvy = b.vy - a.vy;
         const normalVel = rvx * nx + rvy * ny;
@@ -447,15 +449,18 @@ function updatePhysics(dt) {
 
           // 弹性接触轻微挤压
           if (Math.abs(normalVel) > 80 * SCALE) {
-            a.sx = 1.12; a.sy = 0.9;
-            b.sx = 1.12; b.sy = 0.9;
+            a.sx = 1.1; a.sy = 0.92;
+            b.sx = 1.1; b.sy = 0.92;
           }
 
-          // 表面摩擦带动旋转
+          // 接触面滚动摩擦（带衰减与最大力矩限制，避免灵异自转）
           const tx = -ny, ty = nx;
           const tangentVel = rvx * tx + rvy * ty;
-          a.vr += tangentVel * 0.002;
-          b.vr -= tangentVel * 0.002;
+          if (Math.abs(tangentVel) > 10 * SCALE) {
+            const rotImpulse = Math.min(Math.abs(tangentVel * 0.04), 2.5) * Math.sign(tangentVel);
+            a.vr += rotImpulse / a.r * 15;
+            b.vr -= rotImpulse / b.r * 15;
+          }
         }
       }
     }
@@ -473,7 +478,6 @@ function checkDanger(dt) {
   let inDanger = false;
 
   for (const b of bodies) {
-    // 刚生成的水果有短暂豁免期
     if (now - b.spawnTime < 900) continue;
     const isStationary = Math.abs(b.vy) < 45 * SCALE;
     if (b.y - b.r < lineY && isStationary) {
@@ -493,7 +497,6 @@ function checkDanger(dt) {
     lineEl.classList.remove("flash");
   }
 
-  // 连击标签超时隐藏
   if (comboCount > 0 && now - lastMergeTime > COMBO_TIMEOUT) {
     comboCount = 0;
     comboTag.classList.add("hidden");
@@ -514,7 +517,6 @@ function render() {
   ctx.save();
   ctx.clearRect(0, 0, W, H);
 
-  // 屏幕震动
   if (screenShake > 0) {
     const ox = (Math.random() - 0.5) * screenShake;
     const oy = (Math.random() - 0.5) * screenShake;
@@ -526,7 +528,6 @@ function render() {
     const r = fruitRadius(curLevel);
     const x = Math.max(r + 2, Math.min(W - r - 2, aimX));
 
-    // 瞄准引导线
     ctx.save();
     ctx.strokeStyle = "rgba(255, 255, 255, 0.65)";
     ctx.setLineDash([6, 8]);
@@ -537,7 +538,6 @@ function render() {
     ctx.stroke();
     ctx.restore();
 
-    // 待投放水果 (带呼吸微动)
     renderFruit(curLevel, x, r + 6, r, 0, 1.0, 1.0, 1.0);
   }
 
@@ -557,7 +557,7 @@ function render() {
     ctx.restore();
   }
 
-  // 4. 绚丽粒子特效
+  // 4. 粒子特效
   for (const p of particles) {
     ctx.save();
     ctx.globalAlpha = Math.max(0, p.life);
@@ -591,7 +591,6 @@ function gameLoop(now) {
   lastFrameTime = now;
 
   if (isRunning && !isGameOver) {
-    // 8 子步高精碰撞解算，确保平滑无抖动
     const subSteps = 8;
     for (let step = 0; step < subSteps; step++) {
       updatePhysics(dt / subSteps);
@@ -599,19 +598,16 @@ function gameLoop(now) {
     checkDanger(dt);
   }
 
-  // 震动衰减
   if (screenShake > 0) {
     screenShake = Math.max(0, screenShake - dt * 25);
   }
 
-  // 冲击波更新
   for (const sw of shockwaves) {
     sw.r += (sw.maxR - sw.r) * dt * 10;
     sw.alpha -= dt * 2.5;
   }
   shockwaves = shockwaves.filter(sw => sw.alpha > 0);
 
-  // 粒子更新
   for (const p of particles) {
     p.x += p.vx * dt;
     p.y += p.vy * dt;
@@ -650,7 +646,6 @@ window.addEventListener("pointerup", () => {
   }
 });
 
-// 禁用双击缩放和默认手势
 document.addEventListener("touchmove", e => e.preventDefault(), { passive: false });
 document.addEventListener("dblclick", e => e.preventDefault());
 
