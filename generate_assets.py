@@ -70,6 +70,20 @@ def add_gloss(img):
     layer = layer.filter(ImageFilter.GaussianBlur(SIZE // 45))
     return Image.alpha_composite(img, layer)
 
+def add_surface_detail(img, color, amount=70, size=2, seed=1):
+    """在球面可见区添加细腻斑点/绒毛，不依赖外部素材。"""
+    rng = np.random.default_rng(seed)
+    layer = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
+    d = ImageDraw.Draw(layer)
+    for _ in range(amount):
+        angle = float(rng.random() * math.tau)
+        # 中心略稀、边缘不越出球面
+        distance = float((rng.random() ** .55) * SIZE * .42)
+        x, y = SIZE/2 + math.cos(angle)*distance, SIZE/2 + math.sin(angle)*distance
+        rad = size * (0.55 + float(rng.random())*.8)
+        d.ellipse([x-rad, y-rad, x+rad, y+rad], fill=color)
+    return Image.alpha_composite(img, layer)
+
 def clip_circle(img):
     mask = Image.new("L", (SIZE, SIZE), 0)
     ImageDraw.Draw(mask).ellipse([0, 0, SIZE - 1, SIZE - 1], fill=255)
@@ -154,6 +168,7 @@ def draw_stem(img, cx=0.5, cy=0.07, h=0.10, color=(120, 85, 50)):
 # ---- 水果渲染 ----
 def make_grape():
     img = create_sphere_base((220, 170, 255), (155, 80, 215), (95, 35, 150))
+    img = add_surface_detail(img, (100, 40, 155, 42), 64, 2.2, 19)
     img = add_gloss(img)
     img = draw_kawaii_face(img, "sleepy")
     img = draw_stem(img, 0.5, 0.03, 0.08, (90, 130, 60))
@@ -192,6 +207,7 @@ def make_lemon():
 
 def make_kiwi():
     img = create_sphere_base((195, 160, 105), (145, 110, 65), (95, 65, 35))
+    img = add_surface_detail(img, (62, 40, 19, 78), 900, 0.85, 71)
     img = add_gloss(img)
     img = draw_kawaii_face(img, "shy")
     return clip_circle(img)
@@ -231,6 +247,7 @@ def make_pineapple():
 
 def make_coconut():
     img = create_sphere_base((180, 140, 95), (120, 85, 55), (75, 50, 30))
+    img = add_surface_detail(img, (65, 41, 22, 60), 160, 1.8, 31)
     d = ImageDraw.Draw(img)
     for i in (-1, 0, 1):
         x = SIZE * 0.5 + i * SIZE * 0.12
