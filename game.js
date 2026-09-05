@@ -42,7 +42,7 @@
 
   // ------- 物理：稳定、自然的无旋转软碰撞模型 -------
   function physics(dt){
-    const gravity=2050*(stage.w/460), floor=stage.y+stage.h;
+    const gravity=1900*(stage.w/460), floor=stage.y+stage.h;
     const bodyCount=bodies.length;
 
     // 积分、边界和果冻回弹。缩放范围被限制，眼睛不会再被夸张拉扯。
@@ -60,7 +60,7 @@
       else if(b.x+b.r>stage.x+stage.w){ b.x=stage.x+stage.w-b.r; b.vx=-Math.abs(b.vx)*.26; b.sx=.96; b.sy=1.04; }
       if(b.y+b.r>floor){
         b.y=floor-b.r;
-        if(Math.abs(b.vy)>62){ b.vy=-b.vy*.28; b.sx=1.075; b.sy=.94; }
+        if(Math.abs(b.vy)>48){ b.vy=-b.vy*.34; b.sx=1.07; b.sy=.945; }
         else b.vy=0;
         b.vx*=.95;
         if(Math.abs(b.vx)<2) b.vx=0;
@@ -79,19 +79,25 @@
 
         const nx=dx/distance, ny=dy/distance;
         // 留出极小的软接触余量：不突兀弹开，也不会持续交叠抖动。
-        const penetration=Math.max(0,target-distance-.65);
+        const penetration=Math.max(0,target-distance-.25);
         const ma=a.r*a.r, mb=b.r*b.r, invMass=1/ma+1/mb;
         a.x-=nx*penetration*(mb/(ma+mb)); a.y-=ny*penetration*(mb/(ma+mb));
         b.x+=nx*penetration*(ma/(ma+mb)); b.y+=ny*penetration*(ma/(ma+mb));
 
         const relativeNormal=(b.vx-a.vx)*nx+(b.vy-a.vy)*ny;
         if(relativeNormal<0){
-          // 高速碰撞才有明显弹性，低速堆叠自然贴合，避免“硬塑料撞击”。
-          const restitution=Math.abs(relativeNormal)>100?.34:.07;
+          // 分级回弹：相对速度越大，反弹越明显；低速接触仍保留可感知的分离。
+          // 这样不同水果不会“粘成一团”，同时不会在稳定堆叠后永久跳动。
+          const speed=Math.abs(relativeNormal);
+          const restitution=speed>260 ? .48 : speed>90 ? .38 : .22;
           const impulse=-(1+restitution)*relativeNormal/invMass;
           a.vx-=impulse*nx/ma; a.vy-=impulse*ny/ma;
           b.vx+=impulse*nx/mb; b.vy+=impulse*ny/mb;
-          if(Math.abs(relativeNormal)>55){ a.sx=b.sx=1.045; a.sy=b.sy=.96; }
+          if(speed>55){
+            a.sx=b.sx=1.045; a.sy=b.sy=.96;
+            // 仅在明显碰撞时产生极小冲击环，增强“弹开”的视觉反馈。
+            if(!merging && speed>145 && waves.length<12) waves.push({x:(a.x+b.x)/2,y:(a.y+b.y)/2,r:6,max:Math.min(a.r,b.r)*.75,a:.28});
+          }
         }
       }
     }
