@@ -23,7 +23,9 @@
 
   function resize(){
     D=Math.min(devicePixelRatio||1,3); W=innerWidth; H=innerHeight; C.width=W*D; C.height=H*D; X.setTransform(D,0,0,D,0,0);
-    const bottom=72, top=116; stage={x:10,y:top,w:W-20,h:Math.max(230,H-top-bottom)}; aimX=W/2;
+    // 预留道具栏(46px)、图鉴(39px)及间距，避免矮屏幕下 HUD / 道具栏互相覆盖。
+    const top=116, toolBar=46, evolution=39, safeGap=14;
+    stage={x:10,y:top,w:W-20,h:Math.max(100,H-top-toolBar-evolution-safeGap)}; aimX=W/2;
     bodies.forEach(b=>{b.r=radius(b.level);b.x=Math.max(stage.x+b.r,Math.min(stage.x+stage.w-b.r,b.x));});
   }
   function radius(l){ return FRUITS[l].r*stage.w*.5; }
@@ -132,6 +134,7 @@
   function point(e){const r=C.getBoundingClientRect();return {x:e.clientX-r.left,y:e.clientY-r.top};}
   C.addEventListener('pointerdown',e=>{pointerDown=true;const p=point(e);aimX=p.x;try{C.setPointerCapture(e.pointerId);}catch(_){}});
   C.addEventListener('pointercancel',()=>{pointerDown=false;});
+  C.addEventListener('lostpointercapture',()=>{pointerDown=false;});
   C.addEventListener('pointermove',e=>{if(pointerDown||e.pointerType==='mouse')aimX=point(e).x;});
   C.addEventListener('pointerup',e=>{const p=point(e);pointerDown=false;const hit=buttons.find(b=>p.x>=b.x&&p.x<=b.x+b.w&&p.y>=b.y&&p.y<=b.y+b.h);if(hit){hit.fn();return;}if(screen==='game'){if(hammer){hitHammer(p.x,p.y);}else if(p.x>=stage.x&&p.x<=stage.x+stage.w&&p.y>=stage.y&&p.y<=stage.y+stage.h)drop();}});
   C.addEventListener('contextmenu',e=>e.preventDefault());window.addEventListener('resize',resize);document.addEventListener('touchmove',e=>e.preventDefault(),{passive:false});
