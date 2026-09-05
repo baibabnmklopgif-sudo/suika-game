@@ -1,0 +1,7 @@
+<resources>
+ <style name="Theme.Suika" parent="android:style/Theme.Material.Light.NoActionBar">
+  <item name="android:fontFamily">sans</item><item name="android:windowActionModeOverlay">true</item>
+  <item name="android:windowFullscreen">true</item><item name="android:colorAccent">#FF6B35</item>
+  <item name="android:windowBackground">@color/game_background</item>
+ </style>
+</resources>
